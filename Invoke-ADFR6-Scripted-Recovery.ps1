@@ -2,8 +2,8 @@
 <#
  =================================================================================================
  Script          : Invoke-ADFR6-Scripted-Recovery.ps1
- Version         : v1.1.0
- Date            : 2026-09-03
+ Version         : v2.2.7
+ Date            : 2026-09-04
  Original Author : Rob Ingenthron, Semperis  (2026)
  -------------------------------------------------------------------------------------------------
 #>
@@ -11,12 +11,42 @@
 .SYNOPSIS
     Invoke-ADFR6-Scripted-Recovery.ps1
 
-    ADFR 6.0 scripted forest recovery with switchable targets and backup-set scoping.
+    ADFR 6.0 scripted forest recovery with CSV-driven lab configuration,
+    switchable targets, and backup-set scoping.
 
 .DESCRIPTION
-    The DEFAULTS section is the main place to adapt this script for another lab.
-    Edit the forest, domains, DC mappings, existing target IPs, and blank-target
-    IPs there. Command-line values override the applicable DEFAULTS values.
+    Lab-specific forest, domain, recovery-plan, and DC mapping values are loaded
+    from a comma-delimited CSV file with a header row. This avoids editing the
+    PowerShell script when moving the recovery workflow to a new lab environment.
+
+    By default, the script loads Invoke-ADFR6-Scripted-Recovery.csv from the same
+    directory as this script. Use -DcMappingsCsv to select another CSV file.
+    Every data row must contain these columns, in this logical schema:
+
+      AdfrServer, ForestName, RootDomain, RecoveryPlan, Domain, SourceDcName,
+      SourceDcFqdn, Include, RestoreOperation, Staged, ExistingTargetVm,
+      ExistingTargetIp, BlankTargetVm, BlankTargetIp
+
+    The first four values are environment-level settings and must be repeated
+    consistently on every data row. Include and Staged accept true/false, 1/0,
+    yes/no, or on/off. RestoreOperation must be RestoreFromBackup, Delete, or
+    Repromote. The remaining mapping fields are retained as strings and are used
+    by the selected TargetMode. The CSV must contain at least one data row.
+
+    RestoreOperation controls the action assigned to each included DC:
+      RestoreFromBackup - recover the DC from the selected backup.
+      Delete            - omit the DC from the initial ADFR recovery plan so
+                          ADFR can apply its delete-by-omission behavior. Delete
+                          is never passed to an ADFR recovery-plan entry.
+      Repromote         - include a repromote action after backup-restored DCs
+                          are recovered.
+
+    Include=true, Staged=false rows are eligible for the initial recovery plan.
+    Include=true, Staged=true rows are held as Continue Staged Recovery candidates.
+    Include=false rows are ignored. Only RestoreFromBackup and Repromote are sent
+    to ADFR. Delete rows are reported as prune-by-omission candidates; to recover
+    one later through staged recovery, change its CSV operation to a valid ADFR
+    operation and set Staged=true before running the staged-recovery workflow.
 
     TargetMode:
       Existing - use the ExistingTargetVm/ExistingTargetIp values.
@@ -37,7 +67,7 @@
                                   DEFAULTS ScopeMode value.
 
     BackupSetIntersection supports an MVC/partial backup such as one DC per domain:
-    only the mapped DCs found in the selected backup set are placed in the recovery
+    only the mapped DCs found in that selected backup set are placed in the recovery
     plan. Mappings not present in that backup set are omitted and reported as
     ignored, allowing ADFR to prune omitted DCs from the recovered topology.
 
@@ -49,33 +79,67 @@
     6.0 PowerShell module installed. Do not use PowerShell ISE.
 
 .CHANGE_HISTORY
-
+ =================================================================================================
+.VERSION HISTORY
+ Date        Version     Author                        Description
+ ----------  ----------  --------------------------    ---------------------------------------------------------------
+ 2026-09-08  v2.2.7      Rob Ingenthron, Semperis       Refreshes the ADFR connection every 15 minutes and retries broker-status queries after connection failures.
+ 2026-09-04  v2.2.6      Rob Ingenthron, Semperis       Prints the initial nested step snapshot and tolerates status responses without an exact RecoveryId match.
+ 2026-09-04  v2.2.5      Rob Ingenthron, Semperis       Added optional -ShowProgress polling with per-step status-change output and machine-readable completion status.
+ 2026-09-04  v2.2.4      Rob Ingenthron, Semperis       Treats CSV Delete as plan omission/prune-by-omission; only valid ADFR operations reach the recovery plan.
+ 2026-09-04  v2.2.3      Rob Ingenthron, Semperis       Added PowerShell 5.x-safe CSV loading and relative/absolute path resolution.
+ 2026-09-04  v2.2.2      Rob Ingenthron, Semperis       Removed duplicate RestoreOperation keys that caused PowerShell parser errors.
+ 2026-09-04  v2.2.1      Rob Ingenthron, Semperis       Standardized and enforced the required CSV header order.
+ 2026-09-04  v2.2.0      Rob Ingenthron, Semperis       Added named RestoreOperation values for restore, delete,
+                                                       and repromote recovery-plan actions.
+ 2026-09-04  v2.1.0      Rob Ingenthron, Semperis       Added the Staged CSV flag; initial recovery excludes staged
+                                                       rows and reports them for Continue Staged Recovery.
+ 2026-09-04  v2.0.0      Rob Ingenthron, Semperis       Replaced embedded environment defaults and DcMappings with
+                                                       comma-delimited CSV input; added CSV schema validation,
+                                                       type conversion, and -DcMappingsCsv.
+ 2026-09-03  v1.1.0      Rob Ingenthron, Semperis       Initial coding with Glean.
 
 .PARAMETERS
     Command-line parameters and options:
       -AdfrServer <string>
+      -DcMappingsCsv <string>
       -TargetMode <Existing|Blank>
       -ScopeMode <AllMapped|BackupSetIntersection>
       -UseBackupSetScope
       -RuleSessionTag <guid>
       -ReportPath <string>
       -StartRecovery
+      -ShowProgress
       -Help
 
 .PARAMETER AdfrServer
-    ADFR Management Server to connect to. If omitted, the DEFAULTS value is used
-    (default: localhost).
+    Optional command-line override for the AdfrServer value loaded from the CSV.
+    If omitted, the CSV value is used.
+
+.PARAMETER DcMappingsCsv
+    Path to the comma-delimited CSV containing the four environment fields and
+    the ten DC mapping fields. The required CSV header order is:
+    Domain, SourceDcName, SourceDcFqdn, Include, RestoreOperation, Staged,
+    ExistingTargetVm, ExistingTargetIp, BlankTargetVm, BlankTargetIp.
+    RestoreOperation accepts RestoreFromBackup, Delete, or Repromote.
+    Relative paths are resolved from the current PowerShell directory; absolute
+    paths are used as provided. If omitted, the script loads
+    Invoke-ADFR6-Scripted-Recovery.csv from the script directory. Include=true/
+    Staged=false rows are sent in the initial
+    recovery plan. Include=true/Staged=true rows are reported for the
+    post-recovery Continue Staged Recovery operation.
 
 .PARAMETER TargetMode
-    Selects the target fields in DEFAULTS.DcMappings. Existing uses
+    Selects the target fields loaded from the CSV. Existing uses
     ExistingTargetVm/ExistingTargetIp. Blank uses BlankTargetVm/BlankTargetIp.
-    Valid options are Existing and Blank. If omitted, DEFAULTS.TargetMode is used.
+    Valid options are Existing and Blank. If omitted, the script default is Blank.
 
 .PARAMETER ScopeMode
-    Selects which enabled DC mappings are included. AllMapped includes every
-    enabled DcMappings row. BackupSetIntersection reads the selected backup-set
-    inventory and includes only enabled mappings present in that backup set;
-    missing mappings are ignored and appear in the reports.
+    Selects which enabled initial-recovery DC mappings are included. AllMapped
+    includes every enabled CSV mapping where Staged=false. BackupSetIntersection
+    reads the selected backup-set inventory and includes only those initial rows
+    present in that backup set; missing initial mappings are ignored and appear in
+    the reports. Include=true/Staged=true rows remain staged-recovery candidates.
 
 .PARAMETER UseBackupSetScope
     Convenience switch equivalent to -ScopeMode BackupSetIntersection. If both
@@ -94,6 +158,15 @@
     Starts Start-ADFRForestRecovery after displaying the plan. Without this
     switch, the script only previews the plan and writes reports.
 
+.PARAMETER ShowProgress
+    Requires -StartRecovery. After starting the recovery, polls
+    Get-ADFRRecoveryJobStatus every 30 seconds. It prints a step when its Status
+    changes and exits after the final "Repromotion of Domain Controllers" step
+    has an Ended value or a terminal status. During monitoring, the ADFR server
+    connection is refreshed every 15 minutes and refreshed immediately after a
+    broker-status query failure. The final progress object is also emitted to
+    the PowerShell success output stream for use by another script.
+
 .PARAMETER Help
     Displays this comment-based help, including the script name, description,
     parameters, and examples, then exits without connecting to ADFR.
@@ -102,70 +175,53 @@
     -ErrorAction are also available because the script uses CmdletBinding.
 
 .EXAMPLE
-    .\adfr6-scripted-recovery.ps1
+    .\Invoke-ADFR6-Scripted-Recovery.ps1
 
-    Previews the recovery plan using all DEFAULTS values. No recovery is started.
-
-.EXAMPLE
-    .\adfr6-scripted-recovery.ps1 -StartRecovery
-
-    Uses only the DEFAULTS values and -StartRecovery. It previews the plan and
-    then starts the recovery.
+    Loads Invoke-ADFR6-Scripted-Recovery.csv from the script directory and
+    previews the recovery plan using the CSV and other default values.
 
 .EXAMPLE
-    .\adfr6-scripted-recovery.ps1 -TargetMode Blank -ScopeMode BackupSetIntersection -StartRecovery
+    .\Invoke-ADFR6-Scripted-Recovery.ps1 -StartRecovery
 
-    Targets the configured blank VMs and recovers only the enabled DC mappings
-    found in the selected backup set. This is the typical MVC/partial-backup
-    command-line form.
-
-.EXAMPLE
-    .\adfr6-scripted-recovery.ps1 -UseBackupSetScope
-
-    Previews the plan with BackupSetIntersection. This is equivalent to
-    -ScopeMode BackupSetIntersection and does not start recovery.
+    Uses only -StartRecovery in addition to the default CSV path, previews the
+    plan, and then starts the recovery.
 
 .EXAMPLE
-    .\adfr6-scripted-recovery.ps1 -ScopeMode AllMapped -TargetMode Blank
+    .\Invoke-ADFR6-Scripted-Recovery.ps1 -DcMappingsCsv C:\ADFR\Labs\lab02.csv
 
-    Previews a plan containing every enabled DcMappings row, regardless of
-    whether each DC is present in the selected backup-set inventory. AllMapped
-    is the original behavior and can fail if the selected backup does not include
-    every mapped DC.
+    Loads a different lab environment from the specified comma-delimited CSV and
+    previews the recovery plan.
 
 .EXAMPLE
-    .\adfr6-scripted-recovery.ps1 -AdfrServer adfr-mgmt.d01.lab -TargetMode Blank -ScopeMode BackupSetIntersection -RuleSessionTag 332c8ba2-b18a-491d-9c73-3e08b7f8c571 -ReportPath C:\ADFR\Reports\mvc.json -StartRecovery
+    .\Invoke-ADFR6-Scripted-Recovery.ps1 -DcMappingsCsv C:\ADFR\Labs\lab02.csv -TargetMode Blank -ScopeMode BackupSetIntersection -StartRecovery
 
-    Connects to the specified ADFR server, selects a specific backup session,
-    targets blank VMs, uses MVC/partial-backup scoping, writes the reports to the
-    specified path, and starts recovery.
-
-.EXAMPLE
-     .\adfr6-scripted-recovery.ps1 -UseBackupSetScope -TargetMode Blank -StartRecovery
-
-    Typical commandline for demo in ransomeware lab in Skillable.
-    Use the MVC backup with just two DCs and recover those 2 DCs only out of the six existing.
-    Target new blank VMs.
+    Loads the lab configuration from lab02.csv, targets the configured blank VMs,
+    recovers only enabled mappings found in the selected backup set, and starts
+    recovery.
 
 .EXAMPLE
-    .\adfr6-scripted-recovery.ps1 -Help
+    .\Invoke-ADFR6-Scripted-Recovery.ps1 -AdfrServer adfr-mgmt.d01.lab -DcMappingsCsv C:\ADFR\Labs\lab02.csv -RuleSessionTag 332c8ba2-b18a-491d-9c73-3e08b7f8c571 -ReportPath C:\ADFR\Reports\mvc.json -WhatIf
+
+    Overrides only the CSV ADFR server value, selects a specific backup session,
+    writes reports to the specified path, and previews without starting recovery.
+
+.EXAMPLE
+    .\Invoke-ADFR6-Scripted-Recovery.ps1 -UseBackupSetScope -TargetMode Blank -StartRecovery -ShowProgress
+
+    Typical MVC/partial-backup command line. It uses the default CSV beside the
+    script, targets blank VMs, selects the backup-set intersection, starts
+    recovery, and polls ADFR for step status changes every 30 seconds.
+
+.EXAMPLE
+    .\Invoke-ADFR6-Scripted-Recovery.ps1 -Help
 
     Displays the script help and exits without connecting to ADFR.
 #>
 
-<#
- =================================================================================================
-.VERSION HISTORY 
- Date        Version     Author                        Description
- ----------  ----------  --------------------------    ---------------------------------------------------------------
- 2026-09-03   v1.1.0    Rob Ingenthron, Semperis       Initial coding with Glean.
-
-#>
-
-
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
     [string]$AdfrServer,
+    [string]$DcMappingsCsv,
     [ValidateSet('Existing', 'Blank')]
     [string]$TargetMode,
     [ValidateSet('AllMapped', 'BackupSetIntersection')]
@@ -174,6 +230,7 @@ param(
     [Guid]$RuleSessionTag = [Guid]::Empty,
     [string]$ReportPath,
     [switch]$StartRecovery,
+    [switch]$ShowProgress,
     [switch]$Help
 )
 
@@ -181,79 +238,206 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 # -Help follows the standard PowerShell comment-based-help pattern. It exits
-# before importing the ADFR module, prompting for credentials, or making changes.
+# before loading the CSV, importing the ADFR module, or prompting for credentials.
 if ($Help) {
     Get-Help -Name $MyInvocation.MyCommand.Path -Full
     return
 }
 
-# =============================================================================
-# DEFAULTS - edit this section when adapting the script to another lab.
-# =============================================================================
-$Defaults = [ordered]@{
-    AdfrServer = 'localhost'
-    ForestName = 'adfr.lab'
-    RootDomain = 'adfr.lab'
-    RecoveryPlan = 'adfr-lab-MVC-Forest-Recovery'
-
-    # Existing is retained for this lab. For clean recovery targets, use Blank.
-    TargetMode = 'Existing'
-
-    # AllMapped preserves the original behavior. Use -UseBackupSetScope, or
-    # change this value to BackupSetIntersection, for MVC/partial backup sets.
-    ScopeMode = 'AllMapped'
-
-    # Every enabled source DC is a candidate. Backup-set scoping can remove
-    # candidates that are not present in the selected backup set.
-    DcMappings = @(
-        [pscustomobject]@{
-            Include          = $true
-            Domain           = 'adfr.lab'
-            SourceDcName     = 'ADFR-DC1'
-            SourceDcFqdn     = 'ADFR-DC1.adfr.lab'
-            ExistingTargetVm = ''
-            ExistingTargetIp = ''
-            BlankTargetVm    = 'blank-vm1'
-            BlankTargetIp    = '10.160.10.1'
-            RestoreOperation = 1
-        }
-        [pscustomobject]@{
-            Include          = $true
-            Domain           = 'adfr.lab'
-            SourceDcName     = 'ADFR-DC2'
-            SourceDcFqdn     = 'ADFR-DC2.adfr.lab'
-            ExistingTargetVm = ''
-            ExistingTargetIp = ''
-            BlankTargetVm    = 'blank-vm3'
-            BlankTargetIp    = '10.160.10.2'
-            RestoreOperation = 1
-        }
-        [pscustomobject]@{
-            Include          = $true
-            Domain           = 'child.adfr.lab'
-            SourceDcName     = 'ADFR-CHILD-DC1'
-            SourceDcFqdn     = 'ADFR-CHILD-DC1.child.adfr.lab'
-            ExistingTargetVm = ''
-            ExistingTargetIp = ''
-            BlankTargetVm    = 'blank-vm2'
-            BlankTargetIp    = '10.160.20.1'
-            RestoreOperation = 1
-        }
-        [pscustomobject]@{
-            Include          = $true
-            Domain           = 'child.adfr.lab'
-            SourceDcName     = 'ADFR-CHILD-DC2'
-            SourceDcFqdn     = 'ADFR-CHILD-DC2.child.adfr.lab'
-            ExistingTargetVm = ''
-            ExistingTargetIp = ''
-            BlankTargetVm    = 'blank-vm4'
-            BlankTargetIp    = '10.160.20.2'
-            RestoreOperation = 1
-        }
-    )
+if ($ShowProgress -and -not $StartRecovery) {
+    throw '-ShowProgress requires -StartRecovery because there is no recovery job to monitor during preview-only execution.'
 }
 
-# Command-line values override DEFAULTS values.
+# =============================================================================
+# CSV CONFIGURATION - the environment and DC mappings are external input.
+# =============================================================================
+$RequiredCsvColumns = @(
+    'AdfrServer',
+    'ForestName',
+    'RootDomain',
+    'RecoveryPlan',
+    'Domain',
+    'SourceDcName',
+    'SourceDcFqdn',
+    'Include',
+    'RestoreOperation',
+    'Staged',
+    'ExistingTargetVm',
+    'ExistingTargetIp',
+    'BlankTargetVm',
+    'BlankTargetIp'
+)
+
+$AllowedRestoreOperations = @('RestoreFromBackup', 'Delete', 'Repromote')
+
+function ConvertTo-CsvBoolean {
+    param(
+        [Parameter(Mandatory = $true)][string]$Value,
+        [Parameter(Mandatory = $true)][string]$FieldName
+    )
+
+    switch ($Value.Trim().ToLowerInvariant()) {
+        'true'  { return $true }
+        '1'     { return $true }
+        'yes'   { return $true }
+        'y'     { return $true }
+        'on'    { return $true }
+        'false' { return $false }
+        '0'     { return $false }
+        'no'    { return $false }
+        'n'     { return $false }
+        'off'   { return $false }
+        default {
+            throw ("CSV field '{0}' must be true/false, 1/0, yes/no, or on/off. Value '{1}' is invalid." -f $FieldName, $Value)
+        }
+    }
+}
+
+function Resolve-DcMappingsCsvPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    if ([IO.Path]::IsPathRooted($Path)) {
+        $candidatePath = $Path
+    }
+    else {
+        $candidatePath = Join-Path -Path (Get-Location).Path -ChildPath $Path
+    }
+
+    if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) {
+        throw ("The DC mappings CSV was not found: {0}" -f $candidatePath)
+    }
+
+    return (Get-Item -LiteralPath $candidatePath -ErrorAction Stop).FullName
+}
+
+function Import-DcMappingsConfiguration {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw ("The DC mappings CSV was not found: {0}" -f $Path)
+    }
+
+    try {
+        $rows = @(Import-Csv -LiteralPath $Path -Delimiter ',' -ErrorAction Stop)
+    }
+    catch {
+        throw ("Unable to read the comma-delimited DC mappings CSV '{0}': {1}" -f $Path, $_.Exception.Message)
+    }
+
+    if ($rows.Count -eq 0) {
+        throw ("The DC mappings CSV '{0}' contains no data rows. It must include a header row and at least one mapping row." -f $Path)
+    }
+
+    $actualColumns = @($rows[0].PSObject.Properties.Name)
+    $missingColumns = @($RequiredCsvColumns | Where-Object { $_ -notin $actualColumns })
+    $unexpectedColumns = @($actualColumns | Where-Object { $_ -notin $RequiredCsvColumns })
+    $actualHeader = [string]::Join(',', [string[]]$actualColumns)
+    $expectedHeader = [string]::Join(',', [string[]]$RequiredCsvColumns)
+    $incorrectColumnOrder = $actualHeader -cne $expectedHeader
+
+    if ($missingColumns.Count -gt 0 -or $unexpectedColumns.Count -gt 0 -or $incorrectColumnOrder) {
+        $missingText = if ($missingColumns.Count -gt 0) { $missingColumns -join ', ' } else { '(none)' }
+        $unexpectedText = if ($unexpectedColumns.Count -gt 0) { $unexpectedColumns -join ', ' } else { '(none)' }
+        throw ("The DC mappings CSV header is invalid. Missing columns: {0}. Unexpected columns: {1}. Expected order: {2}" -f $missingText, $unexpectedText, ($RequiredCsvColumns -join ', '))
+    }
+
+    $environmentFields = @('AdfrServer', 'ForestName', 'RootDomain', 'RecoveryPlan')
+    $environmentValues = [ordered]@{}
+    $firstRow = $rows[0]
+
+    foreach ($field in $environmentFields) {
+        $value = ([string]$firstRow.$field).Trim()
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            throw ("CSV field '{0}' is blank on data row 2." -f $field)
+        }
+
+        $rowNumber = 2
+        foreach ($row in $rows) {
+            $rowValue = ([string]$row.$field).Trim()
+            if ([string]::IsNullOrWhiteSpace($rowValue)) {
+                throw ("CSV field '{0}' is blank on data row {1}." -f $field, $rowNumber)
+            }
+            if ($rowValue -ine $value) {
+                throw ("CSV field '{0}' must be the same on every row. Row 2 has '{1}', but row {2} has '{3}'." -f $field, $value, $rowNumber, $rowValue)
+            }
+            $rowNumber++
+        }
+
+        $environmentValues[$field] = $value
+    }
+
+    $mappings = @()
+    $rowNumber = 2
+    foreach ($row in $rows) {
+        $include = ConvertTo-CsvBoolean -Value ([string]$row.Include) -FieldName ("Include on row {0}" -f $rowNumber)
+        $stagedRecovery = ConvertTo-CsvBoolean -Value ([string]$row.Staged) -FieldName ("Staged on row {0}" -f $rowNumber)
+
+        $restoreOperationText = ([string]$row.RestoreOperation).Trim()
+        $restoreOperationMatches = @($AllowedRestoreOperations | Where-Object { $_ -ieq $restoreOperationText })
+        if ($restoreOperationMatches.Count -ne 1) {
+            throw ("CSV field 'RestoreOperation' on data row {0} must be one of: {1}. Value '{2}' is invalid." -f $rowNumber, ($AllowedRestoreOperations -join ', '), $restoreOperationText)
+        }
+        $restoreOperation = [string]$restoreOperationMatches[0]
+
+        $domain = ([string]$row.Domain).Trim()
+        $sourceDcName = ([string]$row.SourceDcName).Trim()
+        $sourceDcFqdn = ([string]$row.SourceDcFqdn).Trim()
+        if ([string]::IsNullOrWhiteSpace($domain) -or
+            [string]::IsNullOrWhiteSpace($sourceDcName) -or
+            [string]::IsNullOrWhiteSpace($sourceDcFqdn)) {
+            throw ("CSV row {0} must provide Domain, SourceDcName, and SourceDcFqdn." -f $rowNumber)
+        }
+
+        $mappings += [pscustomobject]@{
+            Include          = $include
+            RestoreOperation = $restoreOperation
+            Staged           = $stagedRecovery
+            Domain           = $domain
+            SourceDcName     = $sourceDcName
+            SourceDcFqdn     = $sourceDcFqdn
+            ExistingTargetVm = ([string]$row.ExistingTargetVm).Trim()
+            ExistingTargetIp = ([string]$row.ExistingTargetIp).Trim()
+            BlankTargetVm    = ([string]$row.BlankTargetVm).Trim()
+            BlankTargetIp    = ([string]$row.BlankTargetIp).Trim()
+        }
+
+        $rowNumber++
+    }
+
+    return [pscustomobject]@{
+        AdfrServer   = $environmentValues.AdfrServer
+        ForestName   = $environmentValues.ForestName
+        RootDomain   = $environmentValues.RootDomain
+        RecoveryPlan = $environmentValues.RecoveryPlan
+        DcMappings   = @($mappings)
+        SourcePath   = $Path
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($DcMappingsCsv)) {
+    $DcMappingsCsv = Join-Path -Path $PSScriptRoot -ChildPath 'Invoke-ADFR6-Scripted-Recovery.csv'
+}
+
+$DcMappingsCsv = Resolve-DcMappingsCsvPath -Path $DcMappingsCsv
+$csvConfiguration = Import-DcMappingsConfiguration -Path $DcMappingsCsv
+
+# DEFAULTS retains the internal object shape used by the recovery workflow, but
+# all environment and DC mapping values now come from the external CSV.
+$Defaults = [ordered]@{
+    AdfrServer   = $csvConfiguration.AdfrServer
+    ForestName   = $csvConfiguration.ForestName
+    RootDomain   = $csvConfiguration.RootDomain
+    RecoveryPlan = $csvConfiguration.RecoveryPlan
+    TargetMode   = 'Blank'
+    ScopeMode    = 'AllMapped'
+    DcMappings   = $csvConfiguration.DcMappings
+}
+
+# Command-line values override CSV/default values.
 if ([string]::IsNullOrWhiteSpace($AdfrServer)) {
     $AdfrServer = $Defaults.AdfrServer
 }
@@ -267,10 +451,17 @@ if ($UseBackupSetScope) {
     $ScopeMode = 'BackupSetIntersection'
 }
 
-$selectedMappings = @($Defaults.DcMappings | Where-Object { $_.Include })
-if ($selectedMappings.Count -eq 0) {
-    throw 'No DC mappings are enabled in the DEFAULTS section.'
+$includedMappings = @($Defaults.DcMappings | Where-Object { $_.Include })
+$initialCandidateMappings = @($includedMappings | Where-Object { -not $_.Staged })
+$stagedMappings = @($includedMappings | Where-Object { $_.Staged })
+
+if ($initialCandidateMappings.Count -eq 0) {
+    throw ("No initial-recovery DC mappings with Include=true and Staged=false were found in the CSV: {0}" -f $DcMappingsCsv)
 }
+
+# Only Include=true/Staged=false rows are eligible for the initial backup restore.
+# Include=true/Staged=true rows are retained for the later staged-recovery handoff.
+$selectedMappings = @($initialCandidateMappings)
 
 # =============================================================================
 # Utility functions used for backup-set matching and reporting.
@@ -372,6 +563,187 @@ function Write-RecoveryReports {
     $ReportRows | Export-Csv -Path $CsvPath -NoTypeInformation -Encoding UTF8
 }
 
+function Get-RecoveryStepPropertyValue {
+    param(
+        [Parameter(Mandatory = $true)][object]$Step,
+        [Parameter(Mandatory = $true)][string]$PropertyName
+    )
+
+    $property = $Step.PSObject.Properties[$PropertyName]
+    if ($null -eq $property -or $null -eq $property.Value) {
+        return ''
+    }
+
+    return [string]$property.Value
+}
+
+function Refresh-ADFRRecoveryConnection {
+    param(
+        [Parameter(Mandatory = $true)][string]$Server,
+        [Parameter(Mandatory = $true)][PSCredential]$Credential,
+        [Parameter(Mandatory = $true)][string]$ForestName,
+        [Parameter(Mandatory = $true)][ref]$Connection
+    )
+
+    # Reuse the same server and credential inputs as the initial connection.
+    # Re-select the forest because a reconnect may reset the selected context.
+    $Connection.Value = Connect-ADFRServer `
+        -Server $Server `
+        -Credential $Credential `
+        -ErrorAction Stop
+
+    Select-ADFRForest -Name $ForestName -ErrorAction Stop | Out-Null
+}
+
+function Watch-ADFRRecoveryProgress {
+    param(
+        [Parameter(Mandatory = $true)][string]$RecoveryId,
+        [Parameter(Mandatory = $true)][string]$AdfrServer,
+        [Parameter(Mandatory = $true)][string]$ForestName,
+        [Parameter(Mandatory = $true)][PSCredential]$Credential,
+        [Parameter(Mandatory = $true)][ref]$Connection,
+        [Parameter(Mandatory = $false)][int]$PollSeconds = 30,
+        [Parameter(Mandatory = $false)][int]$ReconnectMinutes = 15
+    )
+
+    $finalStepName = 'Repromotion of Domain Controllers'
+    $lastStatusByStep = @{}
+    $warnedNoStatusRows = $false
+    $nextConnectionRefreshUtc = [DateTime]::UtcNow.AddMinutes($ReconnectMinutes)
+
+    Write-Host ('Monitoring ADFR recovery progress every {0} seconds...' -f $PollSeconds) -ForegroundColor Cyan
+
+    while ($true) {
+        if ([DateTime]::UtcNow -ge $nextConnectionRefreshUtc) {
+            Write-Host 'Refreshing the ADFR server connection before the next status query...' -ForegroundColor Cyan
+            try {
+                Refresh-ADFRRecoveryConnection `
+                    -Server $AdfrServer `
+                    -Credential $Credential `
+                    -ForestName $ForestName `
+                    -Connection $Connection
+                $nextConnectionRefreshUtc = [DateTime]::UtcNow.AddMinutes($ReconnectMinutes)
+                Write-Host 'ADFR server connection refreshed.' -ForegroundColor Green
+            }
+            catch {
+                Write-Warning ('Scheduled ADFR connection refresh failed: {0}. A retry will be attempted in 60 seconds.' -f $_.Exception.Message)
+                $nextConnectionRefreshUtc = [DateTime]::UtcNow.AddSeconds(60)
+            }
+        }
+
+        try {
+            $allJobRows = @(Get-ADFRRecoveryJobStatus -ErrorAction Stop)
+        }
+        catch {
+            $statusError = $_.Exception.Message
+            Write-Warning ('Get-ADFRRecoveryJobStatus failed: {0}. Refreshing the ADFR connection and retrying once.' -f $statusError)
+            try {
+                Refresh-ADFRRecoveryConnection `
+                    -Server $AdfrServer `
+                    -Credential $Credential `
+                    -ForestName $ForestName `
+                    -Connection $Connection
+                $nextConnectionRefreshUtc = [DateTime]::UtcNow.AddMinutes($ReconnectMinutes)
+                $allJobRows = @(Get-ADFRRecoveryJobStatus -ErrorAction Stop)
+                Write-Host 'ADFR status query succeeded after connection refresh.' -ForegroundColor Green
+            }
+            catch {
+                Write-Warning ('ADFR status query still failed after connection refresh: {0}. The monitor will retry in {1} seconds.' -f $_.Exception.Message, $PollSeconds)
+                Start-Sleep -Seconds $PollSeconds
+                continue
+            }
+        }
+        $jobRows = @(
+            $allJobRows |
+                Where-Object { ([string]$_.RecoveryId).Trim() -eq ([string]$RecoveryId).Trim() }
+        )
+
+        # Some ADFR module builds return the current recovery status without
+        # preserving the exact RecoveryId string returned by the start cmdlet.
+        # If only one status object is returned, it is unambiguous and usable.
+        if ($jobRows.Count -eq 0 -and $allJobRows.Count -eq 1) {
+            $jobRows = @($allJobRows)
+        }
+        elseif ($jobRows.Count -eq 0 -and -not $warnedNoStatusRows) {
+            Write-Warning ('Get-ADFRRecoveryJobStatus returned no status object matching RecoveryId {0}.' -f $RecoveryId)
+            $warnedNoStatusRows = $true
+        }
+        elseif ($jobRows.Count -gt 0) {
+            $warnedNoStatusRows = $false
+        }
+
+        # Get-ADFRRecoveryJobStatus returns one recovery object whose Steps
+        # property contains the per-step status objects shown by the ADFR CLI.
+        # Fall back to a top-level StepName for module versions that emit rows
+        # directly.
+        $statusRows = @(
+            foreach ($job in $jobRows) {
+                $stepsProperty = $job.PSObject.Properties['Steps']
+                if ($null -ne $stepsProperty -and $null -ne $stepsProperty.Value) {
+                    @($stepsProperty.Value)
+                }
+                elseif ($null -ne $job.PSObject.Properties['StepName']) {
+                    $job
+                }
+            }
+        )
+
+        foreach ($step in $statusRows) {
+            $stepName = Get-RecoveryStepPropertyValue -Step $step -PropertyName 'StepName'
+            if ([string]::IsNullOrWhiteSpace($stepName)) {
+                continue
+            }
+
+            $status = Get-RecoveryStepPropertyValue -Step $step -PropertyName 'Status'
+            if (-not $lastStatusByStep.ContainsKey($stepName) -or $lastStatusByStep[$stepName] -ine $status) {
+                # The first observation is printed so the operator can see the
+                # current position immediately. Later observations print only
+                # when the step's Status changes.
+                Write-Host ('StepName: {0}' -f $stepName)
+                Write-Host ('Status: {0}' -f $status)
+                Write-Host ('Started: {0}' -f (Get-RecoveryStepPropertyValue -Step $step -PropertyName 'Started'))
+                Write-Host ''
+                $lastStatusByStep[$stepName] = $status
+            }
+        }
+
+        $finalStep = @(
+            $statusRows |
+                Where-Object {
+                    (Get-RecoveryStepPropertyValue -Step $_ -PropertyName 'StepName') -ieq $finalStepName
+                } |
+                Select-Object -Last 1
+        ) | Select-Object -First 1
+
+        if ($null -ne $finalStep) {
+            $finalStatus = Get-RecoveryStepPropertyValue -Step $finalStep -PropertyName 'Status'
+            $finalStarted = Get-RecoveryStepPropertyValue -Step $finalStep -PropertyName 'Started'
+            $finalEnded = Get-RecoveryStepPropertyValue -Step $finalStep -PropertyName 'Ended'
+            $terminalStatus = $finalStatus -match '^(Completed|Complete|Succeeded|Success|Failed|Failure|Error|Canceled|Cancelled|Aborted|Skipped)$'
+
+            if (-not [string]::IsNullOrWhiteSpace($finalEnded) -or $terminalStatus) {
+                Write-Host ('Ended: {0}' -f $finalEnded)
+                Write-Host ('Status: {0}' -f $finalStatus)
+                Write-Host 'Restore process complete!'
+                Write-Host ''
+
+                return [pscustomobject]@{
+                    OutputType  = 'ADFR.ScriptedRecovery.ProgressStatus'
+                    PSTypeName  = 'ADFR.ScriptedRecovery.ProgressStatus'
+                    RecoveryId  = [string]$RecoveryId
+                    StepName    = $finalStepName
+                    Status      = $finalStatus
+                    Started     = $finalStarted
+                    Ended       = $finalEnded
+                    Complete    = $true
+                }
+            }
+        }
+
+        Start-Sleep -Seconds $PollSeconds
+    }
+}
+
 # =============================================================================
 # 1. Load the ADFR module, authenticate, and select the forest.
 #    The credential parameter is -Credential (singular).
@@ -435,6 +807,7 @@ Write-Host ('Using RuleSessionTag: {0}' -f $RuleSessionTag) -ForegroundColor Cya
 # =============================================================================
 $backupSetDcNames = @()
 $ignoredMappings = @()
+$pruneByOmissionMappings = @($includedMappings | Where-Object { $_.RestoreOperation -eq 'Delete' })
 $backupInventoryRows = @()
 
 if ($ScopeMode -eq 'BackupSetIntersection') {
@@ -463,29 +836,44 @@ if ($ScopeMode -eq 'BackupSetIntersection') {
     }
 
     $mappingsInBackupSet = @()
-    foreach ($mapping in $selectedMappings) {
-        if (Test-MappingInBackupSet -Mapping $mapping -InventoryKeySet $inventoryKeySet) {
+    foreach ($mapping in $initialCandidateMappings) {
+        # Delete is an explicit CSV omission decision, so retain it for
+        # prune-by-omission reporting even when it is absent from the backup set.
+        # Repromote also does not require a backup inventory row. RestoreFromBackup
+        # is the only action pruned by BackupSetIntersection.
+        if ($mapping.RestoreOperation -in @('Delete', 'Repromote')) {
+            $mappingsInBackupSet += $mapping
+        }
+        elseif (Test-MappingInBackupSet -Mapping $mapping -InventoryKeySet $inventoryKeySet) {
             $mappingsInBackupSet += $mapping
         }
         else {
             $ignoredMappings += [pscustomobject]@{
-                Domain       = $mapping.Domain
-                SourceDcFqdn = $mapping.SourceDcFqdn
-                Reason       = 'Not present in selected backup-set inventory'
+                Include          = $mapping.Include
+                RestoreOperation = $mapping.RestoreOperation
+                Staged           = $mapping.Staged
+                Domain           = $mapping.Domain
+                SourceDcName     = $mapping.SourceDcName
+                SourceDcFqdn     = $mapping.SourceDcFqdn
+                Reason           = 'RestoreFromBackup row not present in selected backup-set inventory'
             }
         }
     }
 
     $selectedMappings = @($mappingsInBackupSet)
     if ($selectedMappings.Count -eq 0) {
-        throw 'None of the enabled DcMappings were found in the selected backup set.'
+        throw 'None of the eligible Include=true/Staged=false mappings were retained for the selected recovery plan.'
     }
 }
+
+# Delete is a CSV-only omission/prune decision. It must not become an
+# ADFR recovery-plan entry, and therefore must not require a target IP.
+$adfrCandidateMappings = @($selectedMappings | Where-Object { $_.RestoreOperation -ne 'Delete' })
 
 # Resolve the active target VM/IP only after backup-set filtering. This prevents
 # an omitted mapping with an intentionally blank target from stopping recovery.
 $activeMappings = @(
-    foreach ($mapping in $selectedMappings) {
+    foreach ($mapping in $adfrCandidateMappings) {
         if ($TargetMode -eq 'Existing') {
             $targetVm = $mapping.ExistingTargetVm
             $targetIp = $mapping.ExistingTargetIp
@@ -496,25 +884,54 @@ $activeMappings = @(
         }
 
         if ([string]::IsNullOrWhiteSpace($targetIp)) {
-            throw ('No target IP is configured for {0} in TargetMode={1}.' -f $mapping.SourceDcFqdn, $TargetMode)
+            throw ('No target IP is configured for {0} in TargetMode={1} and RestoreOperation={2}.' -f $mapping.SourceDcFqdn, $TargetMode, $mapping.RestoreOperation)
         }
 
         [pscustomobject]@{
+            Include          = $mapping.Include
+            RestoreOperation = $mapping.RestoreOperation
+            Staged           = $mapping.Staged
             Domain           = $mapping.Domain
             SourceDcName     = $mapping.SourceDcName
             SourceDcFqdn     = $mapping.SourceDcFqdn
             TargetVm         = $targetVm
             TargetIp         = $targetIp
-            RestoreOperation = [int]$mapping.RestoreOperation
+        }
+    }
+)
+
+# Staged rows are not added to the automated forest-recovery plan. They are
+# retained with their selected target values for the operator's later Continue
+# Staged Recovery operation in the ADFR Recovery Portal.
+$stagedRecoveryMappings = @(
+    foreach ($mapping in ($stagedMappings | Where-Object { $_.RestoreOperation -ne 'Delete' })) {
+        if ($TargetMode -eq 'Existing') {
+            $targetVm = $mapping.ExistingTargetVm
+            $targetIp = $mapping.ExistingTargetIp
+        }
+        else {
+            $targetVm = $mapping.BlankTargetVm
+            $targetIp = $mapping.BlankTargetIp
+        }
+
+        [pscustomobject]@{
+            Include          = $mapping.Include
+            RestoreOperation = $mapping.RestoreOperation
+            Staged           = $mapping.Staged
+            Domain           = $mapping.Domain
+            SourceDcName     = $mapping.SourceDcName
+            SourceDcFqdn     = $mapping.SourceDcFqdn
+            TargetVm         = $targetVm
+            TargetIp         = $targetIp
         }
     }
 )
 
 # ADFR requires an initial restored DC in the forest-root domain. A child domain
-# with no matching backup entries is omitted from the plan and can be pruned.
+# with no matching backup entries is omitted from the initial forest-recovery plan.
 $rootMappings = @($activeMappings | Where-Object { $_.Domain -ieq $Defaults.RootDomain })
 if ($rootMappings.Count -eq 0) {
-    throw ('No mapped DC from the forest root domain ({0}) was found in the selected backup/scope.' -f $Defaults.RootDomain)
+    throw ('No mapped DC from the forest root domain ({0}) was found in the selected initial-recovery scope.' -f $Defaults.RootDomain)
 }
 
 # =============================================================================
@@ -550,16 +967,60 @@ Confirm all of the following:
 "@
 }
 
+function ConvertTo-AdfrRestoreOperationValue {
+    param(
+        [Parameter(Mandatory = $true)][object]$Entry,
+        [Parameter(Mandatory = $true)][ValidateSet('RestoreFromBackup', 'Repromote')][string]$Operation
+    )
+
+    $operationProperty = $Entry.GetType().GetProperty('RestoreOperation')
+    if ($null -eq $operationProperty) {
+        throw 'The ADFR recovery-plan entry does not expose a RestoreOperation property.'
+    }
+
+    $operationType = $operationProperty.PropertyType
+    $nullableType = [Nullable]::GetUnderlyingType($operationType)
+    if ($null -ne $nullableType) {
+        $operationType = $nullableType
+    }
+
+    if ($operationType.IsEnum) {
+        $enumNames = @([Enum]::GetNames($operationType))
+        $enumMatch = @($enumNames | Where-Object { $_ -ieq $Operation })
+        if ($enumMatch.Count -ne 1) {
+            throw ("The ADFR RestoreOperation enum does not contain '{0}'. Available values: {1}" -f $Operation, ($enumNames -join ', '))
+        }
+        return [Enum]::Parse($operationType, [string]$enumMatch[0], $true)
+    }
+
+    if ($operationType -eq [string]) {
+        return $Operation
+    }
+
+    # Older ADFR plan classes expose this property as an integer rather than an
+    # enum. Preserve the legacy numeric values for the two valid ADFR operations.
+    $legacyValues = @{
+        RestoreFromBackup = 1
+        Repromote         = 3
+    }
+    try {
+        return [Convert]::ChangeType($legacyValues[$Operation], $operationType)
+    }
+    catch {
+        throw ("The ADFR RestoreOperation property type '{0}' cannot accept named operation '{1}'." -f $operationType.FullName, $Operation)
+    }
+}
+
 function New-RecoveryPlanDcEntry {
     param(
         [Parameter(Mandatory = $true)][string]$SourceDcFqdn,
-        [Parameter(Mandatory = $true)][string]$TargetIp,
-        [Parameter(Mandatory = $true)][int]$RestoreOperation
+        [Parameter(Mandatory = $false)][string]$TargetIp,
+        [Parameter(Mandatory = $true)][ValidateSet('RestoreFromBackup', 'Repromote')][string]$RestoreOperation
     )
 
     $entry = New-Object -TypeName $dcEntryTypeName
     $entry.DcFqdn = $SourceDcFqdn
-    $entry.RestoreOperation = $RestoreOperation
+    $entry.RestoreOperation = ConvertTo-AdfrRestoreOperationValue -Entry $entry -Operation $RestoreOperation
     $entry.TargetIP = $TargetIp
     return $entry
 }
@@ -612,36 +1073,85 @@ $CsvReportPath = [IO.Path]::ChangeExtension($ReportPath, '.csv')
 $reportRows = @(
     foreach ($mapping in $activeMappings) {
         [pscustomobject]@{
-            RuleSessionTag   = [string]$RuleSessionTag
-            ScopeMode        = $ScopeMode
-            TargetMode       = $TargetMode
-            Domain           = $mapping.Domain
-            SourceDcFqdn     = $mapping.SourceDcFqdn
-            TargetVm         = $mapping.TargetVm
-            TargetIp         = $mapping.TargetIp
-            RestoreOperation = $mapping.RestoreOperation
-            Selected         = $true
-            SelectionReason  = if ($ScopeMode -eq 'BackupSetIntersection') { 'Mapped DC present in selected backup set' } else { 'Enabled DcMapping' }
+            RuleSessionTag       = [string]$RuleSessionTag
+            ScopeMode            = $ScopeMode
+            TargetMode           = $TargetMode
+            Include              = $mapping.Include
+            RestoreOperation     = $mapping.RestoreOperation
+            Staged               = $mapping.Staged
+            RecoveryPhase        = 'InitialForestRecovery'
+            Domain               = $mapping.Domain
+            SourceDcName         = $mapping.SourceDcName
+            SourceDcFqdn         = $mapping.SourceDcFqdn
+            TargetVm             = $mapping.TargetVm
+            TargetIp             = $mapping.TargetIp
+            Selected             = $true
+            StagedRecoverySelected = $false
+            SelectionReason      = if ($ScopeMode -eq 'BackupSetIntersection') { 'Mapped DC present in selected backup set' } else { 'Include=true; Staged=false' }
+        }
+    }
+    foreach ($mapping in $stagedRecoveryMappings) {
+        [pscustomobject]@{
+            RuleSessionTag       = [string]$RuleSessionTag
+            ScopeMode            = $ScopeMode
+            TargetMode           = $TargetMode
+            Include              = $mapping.Include
+            RestoreOperation     = $mapping.RestoreOperation
+            Staged               = $mapping.Staged
+            RecoveryPhase        = 'StagedRecovery'
+            Domain               = $mapping.Domain
+            SourceDcName         = $mapping.SourceDcName
+            SourceDcFqdn         = $mapping.SourceDcFqdn
+            TargetVm             = $mapping.TargetVm
+            TargetIp             = $mapping.TargetIp
+            Selected             = $false
+            StagedRecoverySelected = $true
+            SelectionReason      = 'Include=true; Staged=true; pending Continue Staged Recovery'
+        }
+    }
+    foreach ($mapping in $pruneByOmissionMappings) {
+        [pscustomobject]@{
+            RuleSessionTag       = [string]$RuleSessionTag
+            ScopeMode            = $ScopeMode
+            TargetMode           = $TargetMode
+            Include              = $mapping.Include
+            RestoreOperation     = $mapping.RestoreOperation
+            Staged               = $mapping.Staged
+            RecoveryPhase        = 'PruneByOmission'
+            Domain               = $mapping.Domain
+            SourceDcName         = $mapping.SourceDcName
+            SourceDcFqdn         = $mapping.SourceDcFqdn
+            TargetVm             = ''
+            TargetIp             = ''
+            Selected             = $false
+            StagedRecoverySelected = $false
+            SelectionReason      = 'RestoreOperation=Delete; omitted from the ADFR recovery plan so ADFR can delete/prune the DC by omission'
         }
     }
     foreach ($mapping in $ignoredMappings) {
         [pscustomobject]@{
-            RuleSessionTag   = [string]$RuleSessionTag
-            ScopeMode        = $ScopeMode
-            TargetMode       = $TargetMode
-            Domain           = $mapping.Domain
-            SourceDcFqdn     = $mapping.SourceDcFqdn
-            TargetVm         = ''
-            TargetIp         = ''
-            RestoreOperation = ''
-            Selected         = $false
-            SelectionReason  = $mapping.Reason
+            RuleSessionTag       = [string]$RuleSessionTag
+            ScopeMode            = $ScopeMode
+            TargetMode           = $TargetMode
+            Include              = $mapping.Include
+            RestoreOperation     = $mapping.RestoreOperation
+            Staged               = $mapping.Staged
+            RecoveryPhase        = 'IgnoredFromInitialRecovery'
+            Domain               = $mapping.Domain
+            SourceDcName         = $mapping.SourceDcName
+            SourceDcFqdn         = $mapping.SourceDcFqdn
+            TargetVm             = ''
+            TargetIp             = ''
+            Selected             = $false
+            StagedRecoverySelected = $false
+            SelectionReason      = $mapping.Reason
         }
     }
 )
 
 $report = [ordered]@{
     GeneratedUtc                    = [DateTime]::UtcNow.ToString('o')
+    ConfigurationCsvPath            = $DcMappingsCsv
     ForestName                      = $Defaults.ForestName
     RootDomain                      = $Defaults.RootDomain
     RuleSessionTag                  = [string]$RuleSessionTag
@@ -650,14 +1160,20 @@ $report = [ordered]@{
     TargetMode                      = $TargetMode
     BackupSetDcCount                = $backupSetDcNames.Count
     BackupSetDcs                    = @($backupSetDcNames)
-    EnabledDcMappingsCount          = $selectedMappings.Count + $ignoredMappings.Count
+    IncludedDcMappingsCount         = $includedMappings.Count
+    InitialRecoveryCandidateCount   = $initialCandidateMappings.Count
     SelectedForRecoveryCount        = $activeMappings.Count
-    SelectedForRecovery             = @($activeMappings | Select-Object Domain, SourceDcFqdn, TargetVm, TargetIp, RestoreOperation)
+    SelectedForRecovery             = @($activeMappings | Select-Object Domain, SourceDcName, SourceDcFqdn, RestoreOperation, TargetVm, TargetIp)
+    StagedRecoveryCandidateCount    = $stagedRecoveryMappings.Count
+    StagedRecoveryCandidates         = @($stagedRecoveryMappings | Select-Object Domain, SourceDcName, SourceDcFqdn, RestoreOperation, TargetVm, TargetIp)
+    PruneByOmissionCandidateCount  = $pruneByOmissionMappings.Count
+    PruneByOmissionCandidates       = @($pruneByOmissionMappings | Select-Object Domain, SourceDcName, SourceDcFqdn, RestoreOperation, Staged)
     IgnoredMappingCount             = $ignoredMappings.Count
     IgnoredMappings                 = @($ignoredMappings)
     RecoveryPlanDomains              = @($activeMappings | Select-Object -ExpandProperty Domain -Unique | Sort-Object)
     RecoveryId                      = $null
     RecoveryStatus                  = if ($StartRecovery) { 'PendingStart' } else { 'PreviewOnly' }
+    StagedRecoveryStatus            = if ($stagedRecoveryMappings.Count -gt 0) { 'PendingOperatorContinueStagedRecovery' } else { 'NoneConfigured' }
     JsonReportPath                  = $ReportPath
     CsvReportPath                   = $CsvReportPath
 }
@@ -666,14 +1182,22 @@ Write-RecoveryReports -JsonPath $ReportPath -CsvPath $CsvReportPath -Report $rep
 
 Write-Host ''
 Write-Host ('Recovery plan preview - TargetMode: {0}; ScopeMode: {1}' -f $TargetMode, $ScopeMode) -ForegroundColor Green
-$reportRows | Format-Table Domain, SourceDcFqdn, TargetVm, TargetIp, Selected, SelectionReason -AutoSize
-Write-Host ('Backup-set DCs found: {0}; mapped DCs selected for recovery: {1}; mappings ignored: {2}' -f $backupSetDcNames.Count, $activeMappings.Count, $ignoredMappings.Count) -ForegroundColor Yellow
+$reportRows | Format-Table Include, RestoreOperation, Staged, RecoveryPhase, Domain, SourceDcFqdn, TargetVm, TargetIp, Selected, StagedRecoverySelected, SelectionReason -AutoSize
+Write-Host ('Backup-set DCs found: {0}; initial DCs selected for recovery: {1}; prune-by-omission candidates: {2}; staged-recovery candidates: {3}; mappings ignored: {4}' -f $backupSetDcNames.Count, $activeMappings.Count, $pruneByOmissionMappings.Count, $stagedRecoveryMappings.Count, $ignoredMappings.Count) -ForegroundColor Yellow
+if ($pruneByOmissionMappings.Count -gt 0) {
+    Write-Warning 'Rows with RestoreOperation=Delete are omitted from the ADFR recovery plan and are intended to be pruned/deleted by omission.'
+}
+if ($stagedRecoveryMappings.Count -gt 0) {
+    Write-Warning 'Staged-recovery candidates are not part of the initial backup recovery plan.'
+    Write-Host 'After the initial forest recovery completes, use Recovery Portal > Continue Staged Recovery and select these DCs:' -ForegroundColor Yellow
+    $stagedRecoveryMappings | Format-Table Domain, SourceDcFqdn, RestoreOperation, TargetVm, TargetIp -AutoSize
+}
 Write-Host ('JSON report: {0}' -f $ReportPath) -ForegroundColor DarkGray
 Write-Host ('CSV report:  {0}' -f $CsvReportPath) -ForegroundColor DarkGray
 $recoveryPlan | ConvertTo-Json -Depth 10
 
 if (-not $StartRecovery) {
-    Write-Warning 'Preview only. Re-run with -StartRecovery to invoke Start-ADFRForestRecovery.'
+    Write-Warning 'Preview only. Re-run with -StartRecovery to invoke Start-ADFRForestRecovery for the initial recovery.'
     return
 }
 
@@ -689,20 +1213,60 @@ if ($PSCmdlet.ShouldProcess($Defaults.ForestName, 'Start ADFR forest recovery'))
         -Confirm
 
     $report.RecoveryId = [string]$recoveryId
-    $report.RecoveryStatus = 'Started'
+    $report.RecoveryStatus = if ($stagedRecoveryMappings.Count -gt 0) { 'InitialRecoveryStarted_StagedRecoveryPending' } else { 'Started' }
     $report.GeneratedUtc = [DateTime]::UtcNow.ToString('o')
 
-    $jobStatus = @(
-        Get-ADFRRecoveryJobStatus |
-            Where-Object { ([string]$_.RecoveryId) -eq ([string]$recoveryId) }
-    )
+    try {
+        $jobStatus = @(
+            Get-ADFRRecoveryJobStatus -ErrorAction Stop |
+                Where-Object { ([string]$_.RecoveryId).Trim() -eq ([string]$recoveryId).Trim() }
+        )
+    }
+    catch {
+        Write-Warning ('Initial recovery status query failed: {0}. -ShowProgress will retry after refreshing the ADFR connection.' -f $_.Exception.Message)
+        $jobStatus = @()
+    }
     if ($jobStatus.Count -gt 0) {
         $report.RecoveryStatusDetail = @($jobStatus | Select-Object *)
     }
 
     Write-RecoveryReports -JsonPath $ReportPath -CsvPath $CsvReportPath -Report $report -ReportRows $reportRows
 
-    Write-Host ('Recovery started. Recovery ID: {0}' -f $recoveryId) -ForegroundColor Green
+    Write-Host ('Initial forest recovery started. Recovery ID: {0}' -f $recoveryId) -ForegroundColor Green
+    if ($stagedRecoveryMappings.Count -gt 0) {
+        Write-Warning 'When the initial forest recovery is complete, use Recovery Portal > Continue Staged Recovery for the rows marked Staged=true in the CSV.'
+    }
     Write-Host ('Updated report: {0}' -f $ReportPath) -ForegroundColor Green
+
+    if ($ShowProgress) {
+        $progressStatus = Watch-ADFRRecoveryProgress `
+            -RecoveryId ([string]$recoveryId) `
+            -AdfrServer $AdfrServer `
+            -ForestName $Defaults.ForestName `
+            -Credential $adfrCredential `
+            -Connection ([ref]$conn) `
+            -PollSeconds 30 `
+            -ReconnectMinutes 15
+        $report.RecoveryStatus = [string]$progressStatus.Status
+        $report.RecoveryProgressComplete = $true
+        $report.RecoveryProgressStatus = $progressStatus
+        try {
+            $report.RecoveryStatusDetail = @(
+                Get-ADFRRecoveryJobStatus -ErrorAction Stop |
+                    Where-Object { ([string]$_.RecoveryId).Trim() -eq ([string]$recoveryId).Trim() } |
+                    Select-Object *
+            )
+        }
+        catch {
+            Write-Warning ('Unable to refresh the final recovery status report after monitoring completed: {0}' -f $_.Exception.Message)
+            $report.RecoveryStatusDetail = @($progressStatus)
+        }
+        $report.GeneratedUtc = [DateTime]::UtcNow.ToString('o')
+        Write-RecoveryReports -JsonPath $ReportPath -CsvPath $CsvReportPath -Report $report -ReportRows $reportRows
+        Write-Host ('Updated report: {0}' -f $ReportPath) -ForegroundColor Green
+        Write-Output $progressStatus
+        return
+    }
+
     $jobStatus
 }
