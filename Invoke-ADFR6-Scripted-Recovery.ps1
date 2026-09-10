@@ -1,18 +1,14 @@
 #requires -Version 5.0
 <#
- =================================================================================================
- Script          : Invoke-ADFR6-Scripted-Recovery.ps1
- Version         : v2.2.7
- Date            : 2026-09-04
- Original Author : Rob Ingenthron, Semperis  (2026)
- -------------------------------------------------------------------------------------------------
-#>
-<#
 .SYNOPSIS
     Invoke-ADFR6-Scripted-Recovery.ps1
 
     ADFR 6.0 scripted forest recovery with CSV-driven lab configuration,
     switchable targets, and backup-set scoping.
+
+    To display the complete help from PowerShell, use:
+      Get-Help .\Invoke-ADFR6-Scripted-Recovery.ps1 -Full
+    The script switch -Help displays the same full help and then exits.
 
 .DESCRIPTION
     Lab-specific forest, domain, recovery-plan, and DC mapping values are loaded
@@ -78,26 +74,47 @@
     Run from an elevated Windows PowerShell 5.x session with the matching ADFR
     6.0 PowerShell module installed. Do not use PowerShell ISE.
 
+
+.NOTES
+    Script          : Invoke-ADFR6-Scripted-Recovery.ps1
+    Version         : v2.3.0
+    Date            : 2026-09-08
+    Original Author : Rob Ingenthron, Semperis (2026)
+
+
 .CHANGE_HISTORY
  =================================================================================================
 .VERSION HISTORY
  Date        Version     Author                        Description
  ----------  ----------  --------------------------    ---------------------------------------------------------------
- 2026-09-08  v2.2.7      Rob Ingenthron, Semperis       Refreshes the ADFR connection every 15 minutes and retries broker-status queries after connection failures.
- 2026-09-04  v2.2.6      Rob Ingenthron, Semperis       Prints the initial nested step snapshot and tolerates status responses without an exact RecoveryId match.
- 2026-09-04  v2.2.5      Rob Ingenthron, Semperis       Added optional -ShowProgress polling with per-step status-change output and machine-readable completion status.
- 2026-09-04  v2.2.4      Rob Ingenthron, Semperis       Treats CSV Delete as plan omission/prune-by-omission; only valid ADFR operations reach the recovery plan.
- 2026-09-04  v2.2.3      Rob Ingenthron, Semperis       Added PowerShell 5.x-safe CSV loading and relative/absolute path resolution.
- 2026-09-04  v2.2.2      Rob Ingenthron, Semperis       Removed duplicate RestoreOperation keys that caused PowerShell parser errors.
+ 2026-09-08  v2.3.0      Rob Ingenthron, Semperis       Makes -Help print the complete in-script documentation block 
+                                                        directly instead of relying on Get-Help rendering.
+ 2026-09-08  v2.2.9      Rob Ingenthron, Semperis       Places .SYNOPSIS first so the -Help switch resolves the full
+                                                        comment-based help.
+ 2026-09-08  v2.2.8      Rob Ingenthron, Semperis       Makes the comment-based help discoverable by Get-Help and 
+                                                        documents full-help usage.
+ 2026-09-08  v2.2.7      Rob Ingenthron, Semperis       Refreshes the ADFR connection every 15 minutes and retries 
+                                                        broker-status queries after connection failures.
+ 2026-09-04  v2.2.6      Rob Ingenthron, Semperis       Prints the initial nested step snapshot and tolerates status
+                                                        responses without an exact RecoveryId match.
+ 2026-09-04  v2.2.5      Rob Ingenthron, Semperis       Added optional -ShowProgress polling with per-step 
+                                                        status-change output and machine-readable completion status.
+ 2026-09-04  v2.2.4      Rob Ingenthron, Semperis       Treats CSV Delete as plan omission/prune-by-omission; only 
+                                                        valid ADFR operations reach the recovery plan.
+ 2026-09-04  v2.2.3      Rob Ingenthron, Semperis       Added PowerShell 5.x-safe CSV loading and relative/absolute 
+                                                        path resolution.
+ 2026-09-04  v2.2.2      Rob Ingenthron, Semperis       Removed duplicate RestoreOperation keys that caused PowerShell 
+                                                        parser errors.
  2026-09-04  v2.2.1      Rob Ingenthron, Semperis       Standardized and enforced the required CSV header order.
  2026-09-04  v2.2.0      Rob Ingenthron, Semperis       Added named RestoreOperation values for restore, delete,
-                                                       and repromote recovery-plan actions.
+                                                        and repromote recovery-plan actions.
  2026-09-04  v2.1.0      Rob Ingenthron, Semperis       Added the Staged CSV flag; initial recovery excludes staged
-                                                       rows and reports them for Continue Staged Recovery.
+                                                        rows and reports them for Continue Staged Recovery.
  2026-09-04  v2.0.0      Rob Ingenthron, Semperis       Replaced embedded environment defaults and DcMappings with
-                                                       comma-delimited CSV input; added CSV schema validation,
-                                                       type conversion, and -DcMappingsCsv.
+                                                        comma-delimited CSV input; added CSV schema validation,
+                                                        type conversion, and -DcMappingsCsv.
  2026-09-03  v1.1.0      Rob Ingenthron, Semperis       Initial coding with Glean.
+
 
 .PARAMETERS
     Command-line parameters and options:
@@ -111,6 +128,12 @@
       -StartRecovery
       -ShowProgress
       -Help
+
+.EXAMPLE
+    .\Invoke-ADFR6-Scripted-Recovery.ps1
+
+    Loads Invoke-ADFR6-Scripted-Recovery.csv from the script directory and
+    previews the recovery plan using the CSV and other default values.
 
 .PARAMETER AdfrServer
     Optional command-line override for the AdfrServer value loaded from the CSV.
@@ -167,19 +190,6 @@
     broker-status query failure. The final progress object is also emitted to
     the PowerShell success output stream for use by another script.
 
-.PARAMETER Help
-    Displays this comment-based help, including the script name, description,
-    parameters, and examples, then exits without connecting to ADFR.
-
-    Common PowerShell parameters such as -WhatIf, -Confirm, -Verbose, and
-    -ErrorAction are also available because the script uses CmdletBinding.
-
-.EXAMPLE
-    .\Invoke-ADFR6-Scripted-Recovery.ps1
-
-    Loads Invoke-ADFR6-Scripted-Recovery.csv from the script directory and
-    previews the recovery plan using the CSV and other default values.
-
 .EXAMPLE
     .\Invoke-ADFR6-Scripted-Recovery.ps1 -StartRecovery
 
@@ -213,9 +223,24 @@
     recovery, and polls ADFR for step status changes every 30 seconds.
 
 .EXAMPLE
-    .\Invoke-ADFR6-Scripted-Recovery.ps1 -Help
+    .\Invoke-ADFR6-Scripted-Recovery.ps1 -UseBackupSetScope -TargetMode Blank -DcMappingsCsv .\Invoke-ADFR6-Scripted-Recovery.csv -StartRecovery -ShowProgress
+
+    Commandline for Semperis Skillable ransomware recovery lab. MVC/partial-backup command line. 
+    It uses the included sample CSV preconfigured for the Semperis Skillable ransomware lab.
+    Targets blank VMs, selects the backup-set intersection based on the selected backup set, which is for an MVC recovery.
+    Starts recovery and polls ADFR for step status changes every 30 seconds. 
+    Also refreshes the ADFR connection every 15 minutes to prevent a timeout.
+
+.PARAMETER Help
+    Displays this comment-based help, including the script name, description,
+    parameters, and examples, then exits without connecting to ADFR. This is
+    equivalent to: Get-Help .\Invoke-ADFR6-Scripted-Recovery.ps1 -Full
+
+    Common PowerShell parameters such as -WhatIf, -Confirm, -Verbose, and
+    -ErrorAction are also available because the script uses CmdletBinding.
 
     Displays the script help and exits without connecting to ADFR.
+
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -237,10 +262,21 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-# -Help follows the standard PowerShell comment-based-help pattern. It exits
-# before loading the CSV, importing the ADFR module, or prompting for credentials.
+# -Help exits before loading the CSV, importing the ADFR module, or prompting
+# for credentials. It prints the complete documentation block directly so the
+# result is not reduced to PowerShell's syntax-only view for this script.
 if ($Help) {
-    Get-Help -Name $MyInvocation.MyCommand.Path -Full
+    $scriptText = Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw
+    $helpStart = $scriptText.IndexOf('<#')
+    $helpEnd = $scriptText.IndexOf('#>', $helpStart + 2)
+
+    if ($helpStart -lt 0 -or $helpEnd -lt 0) {
+        throw 'The script documentation block could not be found.'
+    }
+
+    $helpText = $scriptText.Substring($helpStart + 2, $helpEnd - $helpStart - 2).Trim()
+    $helpText = $helpText -replace '(?m)^\.(SYNOPSIS|DESCRIPTION|NOTES|CHANGE_HISTORY|PARAMETERS|PARAMETER|EXAMPLE)\s*$', "`r`n`$1`r`n"
+    Write-Output $helpText.Trim()
     return
 }
 
