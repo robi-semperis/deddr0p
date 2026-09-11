@@ -78,7 +78,7 @@
 
 .NOTES
     Script          : Invoke-ADFR6-Scripted-Recovery.ps1
-    Version         : v2.3.4
+    Version         : v2.3.5
     Date            : 2026-09-10
     Original Author : Rob Ingenthron, Semperis (2026)
 
@@ -87,6 +87,7 @@
 .VERSION HISTORY
  Date        Version     Author                        Description
  ----------  ----------  --------------------------    ---------------------------------------------------------------
+ 2026-09-10  v2.3.5      Rob Ingenthron, Semperis       Writes the final recovery summary while the transcript is still active so it is captured in the log.
  2026-09-10  v2.3.4      Rob Ingenthron, Semperis       Adds full-process transcript logging, 60-day log retention cleanup, and an explicit script completion timestamp.
  2026-09-10  v2.3.3      Rob Ingenthron, Semperis       Restores direct ADFR status polling for immediate step output and suppresses further status queries during stale-final-step grace handling.
  2026-09-10  v2.3.2      Rob Ingenthron, Semperis       Bounds ADFR status queries, prevents stale-step completion from waiting on another query, and displays ADFR UTC timestamps alongside local time.
@@ -1442,10 +1443,24 @@ if ($PSCmdlet.ShouldProcess($Defaults.ForestName, 'Start ADFR forest recovery'))
         $report.GeneratedUtc = [DateTime]::UtcNow.ToString('o')
         Write-RecoveryReports -JsonPath $ReportPath -CsvPath $CsvReportPath -Report $report -ReportRows $reportRows
         Write-AdfrTimestampedHost -Message ('Updated report: {0}' -f $ReportPath) -ForegroundColor Green
+
+        # Explicitly render the success-stream object while the transcript is
+        # still active. PowerShell may otherwise format this object only after
+        # the script returns, which is after Stop-Transcript runs.
+        Write-Host ''
+        Write-Host 'Final recovery status summary:'
+        $summaryText = ($progressStatus | Format-List * | Out-String -Width 4096)
+        Write-Host $summaryText.TrimEnd()
         Write-Output $progressStatus
         return
     }
 
+    if ($jobStatus.Count -gt 0) {
+        Write-Host ''
+        Write-Host 'Final recovery status summary:'
+        $summaryText = ($jobStatus | Format-List * | Out-String -Width 4096)
+        Write-Host $summaryText.TrimEnd()
+    }
     $jobStatus
 }
 }
