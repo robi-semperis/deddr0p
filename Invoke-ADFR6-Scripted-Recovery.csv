@@ -1,0 +1,5 @@
+AdfrServer,ForestName,RootDomain,RecoveryPlan,Domain,SourceDcName,SourceDcFqdn,Include,RestoreOperation,Staged,ExistingTargetVm,ExistingTargetIp,BlankTargetVm,BlankTargetIp
+localhost,adfr.lab,adfr.lab,adfr-lab-MVC-Forest-Recovery,adfr.lab,ADFR-DC1,ADFR-DC1.adfr.lab,true,RestoreFromBackup,False,,,blank-vm1,10.160.10.1
+localhost,adfr.lab,adfr.lab,adfr-lab-MVC-Forest-Recovery,adfr.lab,ADFR-DC2,ADFR-DC2.adfr.lab,true,Repromote,False,,,blank-vm3,10.160.10.2
+localhost,adfr.lab,adfr.lab,adfr-lab-MVC-Forest-Recovery,child.adfr.lab,ADFR-CHILD-DC1,ADFR-CHILD-DC1.child.adfr.lab,true,RestoreFromBackup,False,,,blank-vm2,10.160.20.1
+localhost,adfr.lab,adfr.lab,adfr-lab-MVC-Forest-Recovery,child.adfr.lab,ADFR-CHILD-DC2,ADFR-CHILD-DC2.child.adfr.lab,true,Repromote,False,,,blank-vm4,10.160.20.2
