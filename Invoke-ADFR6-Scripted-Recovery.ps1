@@ -69,52 +69,46 @@
 
     The script previews the plan unless -StartRecovery is specified. It writes a
     JSON scope report and a CSV DC report; the report is updated with the recovery
-    ID after Start-ADFRForestRecovery returns.
+    ID after Start-ADFRForestRecovery returns. Each run also writes a transcript
+    log in the current directory named <script>-<yyyyMMdd_HHmmss>.log. Transcript
+    logs matching that name are retained for 60 days by default.
 
     Run from an elevated Windows PowerShell 5.x session with the matching ADFR
     6.0 PowerShell module installed. Do not use PowerShell ISE.
 
-
 .NOTES
     Script          : Invoke-ADFR6-Scripted-Recovery.ps1
-    Version         : v2.3.0
-    Date            : 2026-09-08
+    Version         : v2.3.4
+    Date            : 2026-09-10
     Original Author : Rob Ingenthron, Semperis (2026)
-
 
 .CHANGE_HISTORY
  =================================================================================================
 .VERSION HISTORY
  Date        Version     Author                        Description
  ----------  ----------  --------------------------    ---------------------------------------------------------------
- 2026-09-08  v2.3.0      Rob Ingenthron, Semperis       Makes -Help print the complete in-script documentation block 
-                                                        directly instead of relying on Get-Help rendering.
- 2026-09-08  v2.2.9      Rob Ingenthron, Semperis       Places .SYNOPSIS first so the -Help switch resolves the full
-                                                        comment-based help.
- 2026-09-08  v2.2.8      Rob Ingenthron, Semperis       Makes the comment-based help discoverable by Get-Help and 
-                                                        documents full-help usage.
- 2026-09-08  v2.2.7      Rob Ingenthron, Semperis       Refreshes the ADFR connection every 15 minutes and retries 
-                                                        broker-status queries after connection failures.
- 2026-09-04  v2.2.6      Rob Ingenthron, Semperis       Prints the initial nested step snapshot and tolerates status
-                                                        responses without an exact RecoveryId match.
- 2026-09-04  v2.2.5      Rob Ingenthron, Semperis       Added optional -ShowProgress polling with per-step 
-                                                        status-change output and machine-readable completion status.
- 2026-09-04  v2.2.4      Rob Ingenthron, Semperis       Treats CSV Delete as plan omission/prune-by-omission; only 
-                                                        valid ADFR operations reach the recovery plan.
- 2026-09-04  v2.2.3      Rob Ingenthron, Semperis       Added PowerShell 5.x-safe CSV loading and relative/absolute 
-                                                        path resolution.
- 2026-09-04  v2.2.2      Rob Ingenthron, Semperis       Removed duplicate RestoreOperation keys that caused PowerShell 
-                                                        parser errors.
+ 2026-09-10  v2.3.4      Rob Ingenthron, Semperis       Adds full-process transcript logging, 60-day log retention cleanup, and an explicit script completion timestamp.
+ 2026-09-10  v2.3.3      Rob Ingenthron, Semperis       Restores direct ADFR status polling for immediate step output and suppresses further status queries during stale-final-step grace handling.
+ 2026-09-10  v2.3.2      Rob Ingenthron, Semperis       Bounds ADFR status queries, prevents stale-step completion from waiting on another query, and displays ADFR UTC timestamps alongside local time.
+ 2026-09-10  v2.3.1      Rob Ingenthron, Semperis       Adds timestamped operational logging, progress heartbeats, and stale final-step completion handling.
+ 2026-09-08  v2.3.0      Rob Ingenthron, Semperis       Makes -Help print the complete in-script documentation block directly instead of relying on Get-Help rendering.
+ 2026-09-08  v2.2.9      Rob Ingenthron, Semperis       Places .SYNOPSIS first so the -Help switch resolves the full comment-based help.
+ 2026-09-08  v2.2.8      Rob Ingenthron, Semperis       Makes the comment-based help discoverable by Get-Help and documents full-help usage.
+ 2026-09-08  v2.2.7      Rob Ingenthron, Semperis       Refreshes the ADFR connection every 15 minutes and retries broker-status queries after connection failures.
+ 2026-09-04  v2.2.6      Rob Ingenthron, Semperis       Prints the initial nested step snapshot and tolerates status responses without an exact RecoveryId match.
+ 2026-09-04  v2.2.5      Rob Ingenthron, Semperis       Added optional -ShowProgress polling with per-step status-change output and machine-readable completion status.
+ 2026-09-04  v2.2.4      Rob Ingenthron, Semperis       Treats CSV Delete as plan omission/prune-by-omission; only valid ADFR operations reach the recovery plan.
+ 2026-09-04  v2.2.3      Rob Ingenthron, Semperis       Added PowerShell 5.x-safe CSV loading and relative/absolute path resolution.
+ 2026-09-04  v2.2.2      Rob Ingenthron, Semperis       Removed duplicate RestoreOperation keys that caused PowerShell parser errors.
  2026-09-04  v2.2.1      Rob Ingenthron, Semperis       Standardized and enforced the required CSV header order.
  2026-09-04  v2.2.0      Rob Ingenthron, Semperis       Added named RestoreOperation values for restore, delete,
-                                                        and repromote recovery-plan actions.
+                                                       and repromote recovery-plan actions.
  2026-09-04  v2.1.0      Rob Ingenthron, Semperis       Added the Staged CSV flag; initial recovery excludes staged
-                                                        rows and reports them for Continue Staged Recovery.
+                                                       rows and reports them for Continue Staged Recovery.
  2026-09-04  v2.0.0      Rob Ingenthron, Semperis       Replaced embedded environment defaults and DcMappings with
-                                                        comma-delimited CSV input; added CSV schema validation,
-                                                        type conversion, and -DcMappingsCsv.
+                                                       comma-delimited CSV input; added CSV schema validation,
+                                                       type conversion, and -DcMappingsCsv.
  2026-09-03  v1.1.0      Rob Ingenthron, Semperis       Initial coding with Glean.
-
 
 .PARAMETERS
     Command-line parameters and options:
@@ -128,12 +122,6 @@
       -StartRecovery
       -ShowProgress
       -Help
-
-.EXAMPLE
-    .\Invoke-ADFR6-Scripted-Recovery.ps1
-
-    Loads Invoke-ADFR6-Scripted-Recovery.csv from the script directory and
-    previews the recovery plan using the CSV and other default values.
 
 .PARAMETER AdfrServer
     Optional command-line override for the AdfrServer value loaded from the CSV.
@@ -187,8 +175,28 @@
     changes and exits after the final "Repromotion of Domain Controllers" step
     has an Ended value or a terminal status. During monitoring, the ADFR server
     connection is refreshed every 15 minutes and refreshed immediately after a
-    broker-status query failure. The final progress object is also emitted to
-    the PowerShell success output stream for use by another script.
+    broker-status query failure. Operational messages include local timestamps,
+    and a five-minute heartbeat is printed while status remains unchanged. ADFR
+    step timestamps are displayed as local time with the raw ADFR value alongside
+    them. If all preceding steps are terminal but ADFR leaves the final step
+    InProgress, the script waits 10 minutes and completes without issuing another
+    status query during that grace period, with a stale-final-step warning. The
+    final progress object is also emitted to the PowerShell success output stream
+    for use by another script.
+
+.PARAMETER Help
+    Displays this comment-based help, including the script name, description,
+    parameters, and examples, then exits without connecting to ADFR. This is
+    equivalent to: Get-Help .\Invoke-ADFR6-Scripted-Recovery.ps1 -Full
+
+    Common PowerShell parameters such as -WhatIf, -Confirm, -Verbose, and
+    -ErrorAction are also available because the script uses CmdletBinding.
+
+.EXAMPLE
+    .\Invoke-ADFR6-Scripted-Recovery.ps1
+
+    Loads Invoke-ADFR6-Scripted-Recovery.csv from the script directory and
+    previews the recovery plan using the CSV and other default values.
 
 .EXAMPLE
     .\Invoke-ADFR6-Scripted-Recovery.ps1 -StartRecovery
@@ -227,20 +235,14 @@
 
     Commandline for Semperis Skillable ransomware recovery lab. MVC/partial-backup command line. 
     It uses the included sample CSV preconfigured for the Semperis Skillable ransomware lab.
-    Targets blank VMs, selects the backup-set intersection based on the selected backup set, which is for an MVC recovery.
+    Targets blank VMs, selecting the backup-set intersection based on the selected backup set (for an an MVC recovery).
     Starts recovery and polls ADFR for step status changes every 30 seconds. 
     Also refreshes the ADFR connection every 15 minutes to prevent a timeout.
 
-.PARAMETER Help
-    Displays this comment-based help, including the script name, description,
-    parameters, and examples, then exits without connecting to ADFR. This is
-    equivalent to: Get-Help .\Invoke-ADFR6-Scripted-Recovery.ps1 -Full
-
-    Common PowerShell parameters such as -WhatIf, -Confirm, -Verbose, and
-    -ErrorAction are also available because the script uses CmdletBinding.
+.EXAMPLE
+    .\Invoke-ADFR6-Scripted-Recovery.ps1 -Help
 
     Displays the script help and exits without connecting to ADFR.
-
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -279,6 +281,19 @@ if ($Help) {
     Write-Output $helpText.Trim()
     return
 }
+
+# Transcript configuration. The log is created in the directory from which the
+# script is run, not beside the script or beside the CSV configuration.
+$LogRetentionDays = 60
+$scriptBaseName = [IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
+$transcriptFileName = '{0}-{1}.log' -f $scriptBaseName, (Get-Date -Format 'yyyyMMdd_HHmmss')
+$transcriptPath = Join-Path -Path (Get-Location).Path -ChildPath $transcriptFileName
+$transcriptStarted = $false
+
+try {
+    Start-Transcript -Path $transcriptPath -Force | Out-Null
+    $transcriptStarted = $true
+    Write-Host ('Transcript log: {0}' -f $transcriptPath)
 
 if ($ShowProgress -and -not $StartRecovery) {
     throw '-ShowProgress requires -StartRecovery because there is no recovery job to monitor during preview-only execution.'
@@ -613,6 +628,43 @@ function Get-RecoveryStepPropertyValue {
     return [string]$property.Value
 }
 
+function Write-AdfrTimestampedHost {
+    param(
+        [Parameter(Mandatory = $true)][string]$Message,
+        [Parameter(Mandatory = $false)][System.ConsoleColor]$ForegroundColor = [System.ConsoleColor]::Gray
+    )
+
+    $cleanMessage = $Message.TrimEnd([char[]]@('.', ' '))
+    Write-Host ('{0} : {1}' -f $cleanMessage, (Get-Date).ToString('MM/dd/yyyy HH:mm:ss')) -ForegroundColor $ForegroundColor
+}
+
+function Write-AdfrTimestampedWarning {
+    param(
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    $cleanMessage = $Message.TrimEnd([char[]]@('.', ' '))
+    Write-Warning ('{0} : {1}' -f $cleanMessage, (Get-Date).ToString('MM/dd/yyyy HH:mm:ss'))
+}
+
+function Format-AdfrTimestampForDisplay {
+    param(
+        [Parameter(Mandatory = $false)][AllowEmptyString()][string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $Value
+    }
+
+    $parsed = [DateTimeOffset]::MinValue
+    $styles = [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
+    if ([DateTimeOffset]::TryParse($Value, [Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$parsed)) {
+        return $parsed.ToLocalTime().ToString('MM/dd/yyyy HH:mm:ss')
+    }
+
+    return $Value
+}
+
 function Refresh-ADFRRecoveryConnection {
     param(
         [Parameter(Mandatory = $true)][string]$Server,
@@ -639,19 +691,46 @@ function Watch-ADFRRecoveryProgress {
         [Parameter(Mandatory = $true)][PSCredential]$Credential,
         [Parameter(Mandatory = $true)][ref]$Connection,
         [Parameter(Mandatory = $false)][int]$PollSeconds = 30,
-        [Parameter(Mandatory = $false)][int]$ReconnectMinutes = 15
+        [Parameter(Mandatory = $false)][int]$ReconnectMinutes = 15,
+        [Parameter(Mandatory = $false)][int]$FinalStepGraceMinutes = 10
     )
 
     $finalStepName = 'Repromotion of Domain Controllers'
     $lastStatusByStep = @{}
     $warnedNoStatusRows = $false
     $nextConnectionRefreshUtc = [DateTime]::UtcNow.AddMinutes($ReconnectMinutes)
+    $nextProgressHeartbeatUtc = [DateTime]::UtcNow.AddMinutes(5)
+    $finalStepInProgressSinceUtc = $null
+    $lastFinalStepSnapshot = $null
+    $statusQueryNumber = 0
 
-    Write-Host ('Monitoring ADFR recovery progress every {0} seconds...' -f $PollSeconds) -ForegroundColor Cyan
+    Write-AdfrTimestampedHost -Message ('Monitoring ADFR recovery progress every {0} seconds...' -f $PollSeconds) -ForegroundColor Cyan
 
     while ($true) {
+        # Once all preceding steps are terminal and the final step is stale, do
+        # not issue another ADFR status query. This preserves the initial/direct
+        # cmdlet output path and prevents the post-warning query from blocking.
+        if ($null -ne $finalStepInProgressSinceUtc -and
+            $null -ne $lastFinalStepSnapshot) {
+            $staleDeadlineUtc = $finalStepInProgressSinceUtc.AddMinutes($FinalStepGraceMinutes)
+            if ([DateTime]::UtcNow -ge $staleDeadlineUtc) {
+                Write-AdfrTimestampedWarning -Message ('ADFR still reports the final step as InProgress after {0} minutes, while all preceding steps are terminal. Treating the recovery as complete; verify the ADFR console.' -f $FinalStepGraceMinutes)
+                $scriptEndedAt = (Get-Date).ToString('MM/dd/yyyy HH:mm:ss')
+                $lastFinalStepSnapshot.Ended = $scriptEndedAt
+                $lastFinalStepSnapshot.ScriptEnded = $scriptEndedAt
+                Write-Host ('Ended: {0}' -f $scriptEndedAt)
+                Write-AdfrTimestampedHost -Message 'Restore process complete (final ADFR step status remained stale)' -ForegroundColor Green
+                Write-Host ''
+                return $lastFinalStepSnapshot
+            }
+
+            $remainingSeconds = [int][Math]::Ceiling(($staleDeadlineUtc - [DateTime]::UtcNow).TotalSeconds)
+            Start-Sleep -Seconds ([Math]::Max(1, [Math]::Min($PollSeconds, $remainingSeconds)))
+            continue
+        }
+
         if ([DateTime]::UtcNow -ge $nextConnectionRefreshUtc) {
-            Write-Host 'Refreshing the ADFR server connection before the next status query...' -ForegroundColor Cyan
+            Write-AdfrTimestampedHost -Message 'Refreshing the ADFR server connection before the next status query' -ForegroundColor Cyan
             try {
                 Refresh-ADFRRecoveryConnection `
                     -Server $AdfrServer `
@@ -659,20 +738,21 @@ function Watch-ADFRRecoveryProgress {
                     -ForestName $ForestName `
                     -Connection $Connection
                 $nextConnectionRefreshUtc = [DateTime]::UtcNow.AddMinutes($ReconnectMinutes)
-                Write-Host 'ADFR server connection refreshed.' -ForegroundColor Green
+                Write-AdfrTimestampedHost -Message 'ADFR server connection refreshed' -ForegroundColor Green
             }
             catch {
-                Write-Warning ('Scheduled ADFR connection refresh failed: {0}. A retry will be attempted in 60 seconds.' -f $_.Exception.Message)
+                Write-AdfrTimestampedWarning -Message ('Scheduled ADFR connection refresh failed: {0}. A retry will be attempted in 60 seconds.' -f $_.Exception.Message)
                 $nextConnectionRefreshUtc = [DateTime]::UtcNow.AddSeconds(60)
             }
         }
 
         try {
+            Write-AdfrTimestampedHost -Message 'Querying ADFR recovery status via Get-ADFRRecoveryJobStatus' -ForegroundColor DarkGray
             $allJobRows = @(Get-ADFRRecoveryJobStatus -ErrorAction Stop)
         }
         catch {
             $statusError = $_.Exception.Message
-            Write-Warning ('Get-ADFRRecoveryJobStatus failed: {0}. Refreshing the ADFR connection and retrying once.' -f $statusError)
+            Write-AdfrTimestampedWarning -Message ('Get-ADFRRecoveryJobStatus failed: {0}. Refreshing the ADFR connection and retrying once.' -f $statusError)
             try {
                 Refresh-ADFRRecoveryConnection `
                     -Server $AdfrServer `
@@ -681,10 +761,10 @@ function Watch-ADFRRecoveryProgress {
                     -Connection $Connection
                 $nextConnectionRefreshUtc = [DateTime]::UtcNow.AddMinutes($ReconnectMinutes)
                 $allJobRows = @(Get-ADFRRecoveryJobStatus -ErrorAction Stop)
-                Write-Host 'ADFR status query succeeded after connection refresh.' -ForegroundColor Green
+                Write-AdfrTimestampedHost -Message 'ADFR status query succeeded after connection refresh' -ForegroundColor Green
             }
             catch {
-                Write-Warning ('ADFR status query still failed after connection refresh: {0}. The monitor will retry in {1} seconds.' -f $_.Exception.Message, $PollSeconds)
+                Write-AdfrTimestampedWarning -Message ('ADFR status query still failed after connection refresh: {0}. The monitor will retry in {1} seconds.' -f $_.Exception.Message, $PollSeconds)
                 Start-Sleep -Seconds $PollSeconds
                 continue
             }
@@ -701,7 +781,7 @@ function Watch-ADFRRecoveryProgress {
             $jobRows = @($allJobRows)
         }
         elseif ($jobRows.Count -eq 0 -and -not $warnedNoStatusRows) {
-            Write-Warning ('Get-ADFRRecoveryJobStatus returned no status object matching RecoveryId {0}.' -f $RecoveryId)
+            Write-AdfrTimestampedWarning -Message ('Get-ADFRRecoveryJobStatus returned no status object matching RecoveryId {0}.' -f $RecoveryId)
             $warnedNoStatusRows = $true
         }
         elseif ($jobRows.Count -gt 0) {
@@ -712,6 +792,7 @@ function Watch-ADFRRecoveryProgress {
         # property contains the per-step status objects shown by the ADFR CLI.
         # Fall back to a top-level StepName for module versions that emit rows
         # directly.
+        $statusQueryNumber++
         $statusRows = @(
             foreach ($job in $jobRows) {
                 $stepsProperty = $job.PSObject.Properties['Steps']
@@ -724,6 +805,11 @@ function Watch-ADFRRecoveryProgress {
             }
         )
 
+        if ($statusQueryNumber -eq 1 -or [DateTime]::UtcNow -ge $nextProgressHeartbeatUtc) {
+            Write-AdfrTimestampedHost -Message ('ADFR status query succeeded; progress monitor is still running. Status rows: {0}' -f $statusRows.Count) -ForegroundColor DarkGray
+            $nextProgressHeartbeatUtc = [DateTime]::UtcNow.AddMinutes(5)
+        }
+
         foreach ($step in $statusRows) {
             $stepName = Get-RecoveryStepPropertyValue -Step $step -PropertyName 'StepName'
             if ([string]::IsNullOrWhiteSpace($stepName)) {
@@ -735,9 +821,16 @@ function Watch-ADFRRecoveryProgress {
                 # The first observation is printed so the operator can see the
                 # current position immediately. Later observations print only
                 # when the step's Status changes.
+                $stepStartedRaw = Get-RecoveryStepPropertyValue -Step $step -PropertyName 'Started'
+                $stepStartedLocal = Format-AdfrTimestampForDisplay -Value $stepStartedRaw
                 Write-Host ('StepName: {0}' -f $stepName)
                 Write-Host ('Status: {0}' -f $status)
-                Write-Host ('Started: {0}' -f (Get-RecoveryStepPropertyValue -Step $step -PropertyName 'Started'))
+                if ($stepStartedRaw -ne $stepStartedLocal -and -not [string]::IsNullOrWhiteSpace($stepStartedRaw)) {
+                    Write-Host ('Started: {0} (ADFR raw: {1})' -f $stepStartedLocal, $stepStartedRaw)
+                }
+                else {
+                    Write-Host ('Started: {0}' -f $stepStartedLocal)
+                }
                 Write-Host ''
                 $lastStatusByStep[$stepName] = $status
             }
@@ -755,12 +848,30 @@ function Watch-ADFRRecoveryProgress {
             $finalStatus = Get-RecoveryStepPropertyValue -Step $finalStep -PropertyName 'Status'
             $finalStarted = Get-RecoveryStepPropertyValue -Step $finalStep -PropertyName 'Started'
             $finalEnded = Get-RecoveryStepPropertyValue -Step $finalStep -PropertyName 'Ended'
+            $finalStartedLocal = Format-AdfrTimestampForDisplay -Value $finalStarted
+            $finalEndedLocal = Format-AdfrTimestampForDisplay -Value $finalEnded
             $terminalStatus = $finalStatus -match '^(Completed|Complete|Succeeded|Success|Failed|Failure|Error|Canceled|Cancelled|Aborted|Skipped)$'
+            $priorSteps = @($statusRows | Where-Object {
+                (Get-RecoveryStepPropertyValue -Step $_ -PropertyName 'StepName') -ine $finalStepName
+            })
+            $priorStepsAreTerminal = ($priorSteps.Count -gt 0) -and (@($priorSteps | Where-Object {
+                $priorStatus = Get-RecoveryStepPropertyValue -Step $_ -PropertyName 'Status'
+                $priorStatus -notmatch '^(Completed|Complete|Succeeded|Success|Failed|Failure|Error|Canceled|Cancelled|Aborted|Skipped)$'
+            }).Count -eq 0)
 
             if (-not [string]::IsNullOrWhiteSpace($finalEnded) -or $terminalStatus) {
-                Write-Host ('Ended: {0}' -f $finalEnded)
+                if (-not [string]::IsNullOrWhiteSpace($finalEnded)) {
+                    if ($finalEnded -ne $finalEndedLocal) {
+                        Write-Host ('ADFR Ended: {0} (ADFR raw: {1})' -f $finalEndedLocal, $finalEnded)
+                    }
+                    else {
+                        Write-Host ('ADFR Ended: {0}' -f $finalEndedLocal)
+                    }
+                }
+                $scriptEndedAt = (Get-Date).ToString('MM/dd/yyyy HH:mm:ss')
+                Write-Host ('Ended: {0}' -f $scriptEndedAt)
                 Write-Host ('Status: {0}' -f $finalStatus)
-                Write-Host 'Restore process complete!'
+                Write-AdfrTimestampedHost -Message 'Restore process complete' -ForegroundColor Green
                 Write-Host ''
 
                 return [pscustomobject]@{
@@ -770,9 +881,47 @@ function Watch-ADFRRecoveryProgress {
                     StepName    = $finalStepName
                     Status      = $finalStatus
                     Started     = $finalStarted
-                    Ended       = $finalEnded
+                    Ended       = $scriptEndedAt
+                    AdfrEnded   = $finalEnded
+                    ScriptEnded = $scriptEndedAt
                     Complete    = $true
                 }
+            }
+
+            if ($finalStatus -match '^InProgress$' -and $priorStepsAreTerminal) {
+                $lastFinalStepSnapshot = [pscustomobject]@{
+                    OutputType  = 'ADFR.ScriptedRecovery.ProgressStatus'
+                    PSTypeName  = 'ADFR.ScriptedRecovery.ProgressStatus'
+                    RecoveryId  = [string]$RecoveryId
+                    StepName    = $finalStepName
+                    Status      = 'CompletedWithStaleFinalStep'
+                    Started     = $finalStarted
+                    Ended       = $null
+                    AdfrEnded   = $finalEnded
+                    ScriptEnded = $null
+                    Complete    = $true
+                }
+
+                if ($null -eq $finalStepInProgressSinceUtc) {
+                    $finalStepInProgressSinceUtc = [DateTime]::UtcNow
+                    Write-AdfrTimestampedWarning -Message ('ADFR still reports the final step as InProgress while all preceding steps are terminal. Waiting up to {0} minutes for the final status to update.' -f $FinalStepGraceMinutes)
+                    Write-AdfrTimestampedHost -Message 'No further ADFR status queries will be issued during the stale-final-step grace period' -ForegroundColor DarkGray
+                }
+                elseif ([DateTime]::UtcNow -ge $finalStepInProgressSinceUtc.AddMinutes($FinalStepGraceMinutes)) {
+                    Write-AdfrTimestampedWarning -Message ('ADFR still reports the final step as InProgress after {0} minutes, while all preceding steps are terminal. Treating the recovery as complete; verify the ADFR console.' -f $FinalStepGraceMinutes)
+                    $scriptEndedAt = (Get-Date).ToString('MM/dd/yyyy HH:mm:ss')
+                    $lastFinalStepSnapshot.Ended = $scriptEndedAt
+                    $lastFinalStepSnapshot.ScriptEnded = $scriptEndedAt
+                    Write-Host ('Ended: {0}' -f $scriptEndedAt)
+                    Write-AdfrTimestampedHost -Message 'Restore process complete (final ADFR step status remained stale)' -ForegroundColor Green
+                    Write-Host ''
+
+                    return $lastFinalStepSnapshot
+                }
+            }
+            else {
+                $finalStepInProgressSinceUtc = $null
+                $lastFinalStepSnapshot = $null
             }
         }
 
@@ -791,7 +940,7 @@ if ($null -eq $loadedModule -or $loadedModule.Version.Major -lt 6) {
     throw 'ADFR 6.0 PowerShell module was not loaded. Verify the module installation and version.'
 }
 
-Write-Host ('Loaded ADFR PowerShell module: {0} ({1})' -f $loadedModule.Name, $loadedModule.Version) -ForegroundColor Cyan
+Write-AdfrTimestampedHost -Message ('Loaded ADFR PowerShell module: {0} ({1})' -f $loadedModule.Name, $loadedModule.Version) -ForegroundColor Cyan
 
 $adfrCredential = Get-Credential -Message 'Enter the Windows credentials for an ADFR Recovery Administrator'
 $conn = Connect-ADFRServer `
@@ -836,7 +985,7 @@ if ($RuleSessionTag -eq [Guid]::Empty) {
     throw 'The selected backup did not provide a usable RuleSessionTag.'
 }
 
-Write-Host ('Using RuleSessionTag: {0}' -f $RuleSessionTag) -ForegroundColor Cyan
+Write-AdfrTimestampedHost -Message ('Using RuleSessionTag: {0}' -f $RuleSessionTag) -ForegroundColor Cyan
 
 # =============================================================================
 # 3. Intersect DcMappings with the selected backup-set inventory when requested.
@@ -847,7 +996,7 @@ $pruneByOmissionMappings = @($includedMappings | Where-Object { $_.RestoreOperat
 $backupInventoryRows = @()
 
 if ($ScopeMode -eq 'BackupSetIntersection') {
-    Write-Host 'Refreshing and reading the selected backup-set inventory...' -ForegroundColor Cyan
+    Write-AdfrTimestampedHost -Message 'Refreshing and reading the selected backup-set inventory' -ForegroundColor Cyan
 
     Invoke-ADFRBackupInventory -Connection $conn -Wait $true | Out-Null
     $backupInventoryRows = @(
@@ -1217,30 +1366,30 @@ $report = [ordered]@{
 Write-RecoveryReports -JsonPath $ReportPath -CsvPath $CsvReportPath -Report $report -ReportRows $reportRows
 
 Write-Host ''
-Write-Host ('Recovery plan preview - TargetMode: {0}; ScopeMode: {1}' -f $TargetMode, $ScopeMode) -ForegroundColor Green
+Write-AdfrTimestampedHost -Message ('Recovery plan preview - TargetMode: {0}; ScopeMode: {1}' -f $TargetMode, $ScopeMode) -ForegroundColor Green
 $reportRows | Format-Table Include, RestoreOperation, Staged, RecoveryPhase, Domain, SourceDcFqdn, TargetVm, TargetIp, Selected, StagedRecoverySelected, SelectionReason -AutoSize
-Write-Host ('Backup-set DCs found: {0}; initial DCs selected for recovery: {1}; prune-by-omission candidates: {2}; staged-recovery candidates: {3}; mappings ignored: {4}' -f $backupSetDcNames.Count, $activeMappings.Count, $pruneByOmissionMappings.Count, $stagedRecoveryMappings.Count, $ignoredMappings.Count) -ForegroundColor Yellow
+Write-AdfrTimestampedHost -Message ('Backup-set DCs found: {0}; initial DCs selected for recovery: {1}; prune-by-omission candidates: {2}; staged-recovery candidates: {3}; mappings ignored: {4}' -f $backupSetDcNames.Count, $activeMappings.Count, $pruneByOmissionMappings.Count, $stagedRecoveryMappings.Count, $ignoredMappings.Count) -ForegroundColor Yellow
 if ($pruneByOmissionMappings.Count -gt 0) {
-    Write-Warning 'Rows with RestoreOperation=Delete are omitted from the ADFR recovery plan and are intended to be pruned/deleted by omission.'
+    Write-AdfrTimestampedWarning -Message 'Rows with RestoreOperation=Delete are omitted from the ADFR recovery plan and are intended to be pruned/deleted by omission.'
 }
 if ($stagedRecoveryMappings.Count -gt 0) {
-    Write-Warning 'Staged-recovery candidates are not part of the initial backup recovery plan.'
-    Write-Host 'After the initial forest recovery completes, use Recovery Portal > Continue Staged Recovery and select these DCs:' -ForegroundColor Yellow
+    Write-AdfrTimestampedWarning -Message 'Staged-recovery candidates are not part of the initial backup recovery plan.'
+    Write-AdfrTimestampedHost -Message 'After the initial forest recovery completes, use Recovery Portal > Continue Staged Recovery and select these DCs:' -ForegroundColor Yellow
     $stagedRecoveryMappings | Format-Table Domain, SourceDcFqdn, RestoreOperation, TargetVm, TargetIp -AutoSize
 }
-Write-Host ('JSON report: {0}' -f $ReportPath) -ForegroundColor DarkGray
-Write-Host ('CSV report:  {0}' -f $CsvReportPath) -ForegroundColor DarkGray
+Write-AdfrTimestampedHost -Message ('JSON report: {0}' -f $ReportPath) -ForegroundColor DarkGray
+Write-AdfrTimestampedHost -Message ('CSV report:  {0}' -f $CsvReportPath) -ForegroundColor DarkGray
 $recoveryPlan | ConvertTo-Json -Depth 10
 
 if (-not $StartRecovery) {
-    Write-Warning 'Preview only. Re-run with -StartRecovery to invoke Start-ADFRForestRecovery for the initial recovery.'
+    Write-AdfrTimestampedWarning -Message 'Preview only. Re-run with -StartRecovery to invoke Start-ADFRForestRecovery for the initial recovery.'
     return
 }
 
 # =============================================================================
 # 6. Start recovery and update the report with the returned recovery ID.
 # =============================================================================
-Write-Warning ('TargetMode={0}. Confirm the target VMs are appropriate before continuing.' -f $TargetMode)
+Write-AdfrTimestampedWarning -Message ('TargetMode={0}. Confirm the target VMs are appropriate before continuing.' -f $TargetMode)
 
 if ($PSCmdlet.ShouldProcess($Defaults.ForestName, 'Start ADFR forest recovery')) {
     $recoveryId = Start-ADFRForestRecovery `
@@ -1259,7 +1408,7 @@ if ($PSCmdlet.ShouldProcess($Defaults.ForestName, 'Start ADFR forest recovery'))
         )
     }
     catch {
-        Write-Warning ('Initial recovery status query failed: {0}. -ShowProgress will retry after refreshing the ADFR connection.' -f $_.Exception.Message)
+        Write-AdfrTimestampedWarning -Message ('Initial recovery status query failed: {0}. -ShowProgress will retry after refreshing the ADFR connection.' -f $_.Exception.Message)
         $jobStatus = @()
     }
     if ($jobStatus.Count -gt 0) {
@@ -1268,11 +1417,11 @@ if ($PSCmdlet.ShouldProcess($Defaults.ForestName, 'Start ADFR forest recovery'))
 
     Write-RecoveryReports -JsonPath $ReportPath -CsvPath $CsvReportPath -Report $report -ReportRows $reportRows
 
-    Write-Host ('Initial forest recovery started. Recovery ID: {0}' -f $recoveryId) -ForegroundColor Green
+    Write-AdfrTimestampedHost -Message ('Initial forest recovery started. Recovery ID: {0}' -f $recoveryId) -ForegroundColor Green
     if ($stagedRecoveryMappings.Count -gt 0) {
-        Write-Warning 'When the initial forest recovery is complete, use Recovery Portal > Continue Staged Recovery for the rows marked Staged=true in the CSV.'
+        Write-AdfrTimestampedWarning -Message 'When the initial forest recovery is complete, use Recovery Portal > Continue Staged Recovery for the rows marked Staged=true in the CSV.'
     }
-    Write-Host ('Updated report: {0}' -f $ReportPath) -ForegroundColor Green
+    Write-AdfrTimestampedHost -Message ('Updated report: {0}' -f $ReportPath) -ForegroundColor Green
 
     if ($ShowProgress) {
         $progressStatus = Watch-ADFRRecoveryProgress `
@@ -1286,23 +1435,43 @@ if ($PSCmdlet.ShouldProcess($Defaults.ForestName, 'Start ADFR forest recovery'))
         $report.RecoveryStatus = [string]$progressStatus.Status
         $report.RecoveryProgressComplete = $true
         $report.RecoveryProgressStatus = $progressStatus
-        try {
-            $report.RecoveryStatusDetail = @(
-                Get-ADFRRecoveryJobStatus -ErrorAction Stop |
-                    Where-Object { ([string]$_.RecoveryId).Trim() -eq ([string]$recoveryId).Trim() } |
-                    Select-Object *
-            )
-        }
-        catch {
-            Write-Warning ('Unable to refresh the final recovery status report after monitoring completed: {0}' -f $_.Exception.Message)
-            $report.RecoveryStatusDetail = @($progressStatus)
-        }
+        # Do not issue another synchronous ADFR status query here. The monitor
+        # already completed with its final status snapshot, and a post-completion
+        # broker refresh was the original source of the apparent hang.
+        $report.RecoveryStatusDetail = @($progressStatus)
         $report.GeneratedUtc = [DateTime]::UtcNow.ToString('o')
         Write-RecoveryReports -JsonPath $ReportPath -CsvPath $CsvReportPath -Report $report -ReportRows $reportRows
-        Write-Host ('Updated report: {0}' -f $ReportPath) -ForegroundColor Green
+        Write-AdfrTimestampedHost -Message ('Updated report: {0}' -f $ReportPath) -ForegroundColor Green
         Write-Output $progressStatus
         return
     }
 
     $jobStatus
+}
+}
+finally {
+    if ($transcriptStarted) {
+        try {
+            $logCutoff = (Get-Date).AddDays(-$LogRetentionDays)
+            $logFileRegex = '^' + [regex]::Escape($scriptBaseName) + '-\d{8}_\d{6}\.log$'
+            $oldTranscriptLogs = @(
+                Get-ChildItem -LiteralPath (Get-Location).Path -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -match $logFileRegex -and $_.LastWriteTime -lt $logCutoff }
+            )
+            foreach ($oldTranscriptLog in $oldTranscriptLogs) {
+                Remove-Item -LiteralPath $oldTranscriptLog.FullName -Force -ErrorAction SilentlyContinue
+                Write-Host ('Removed transcript log older than {0} days: {1}' -f $LogRetentionDays, $oldTranscriptLog.FullName)
+            }
+        }
+        catch {
+            Write-Warning ('Transcript log maintenance failed: {0}' -f $_.Exception.Message)
+        }
+
+        try {
+            Stop-Transcript | Out-Null
+        }
+        catch {
+            # The transcript may already have been stopped by the host.
+        }
+    }
 }
