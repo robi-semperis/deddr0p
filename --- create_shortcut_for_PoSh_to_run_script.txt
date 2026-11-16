@@ -1,0 +1,39 @@
+ADContentGenerator script
+
+MAKE SURE TO COPY THE LATEST VERSON TO THE PS1 WITHOUT THE EXTENSION!!
+
+
+
+Instructions for a two-click script start shortcut that more easily runs with Administrator rights (if your lab doesn't start PoSh as Administrator or the execution rights more limited). This just saves a little on clicks. Not required to run the changes script, but with this you will not have to first open a PoSh shell as Administrator.
+
+
+Two parts:
+1) Create link to the the main script.
+2) Create Desktop Shortcut to run the intermediary link which runs the primary script as Administrator.
+
+
+
+PART1: Create a symbolic link called "stuff1.ps1" that references the AD changes script --
+
+mklink [[/d] | [/h] | [/j]] <link> <target>
+
+Parameter	Description
+/d	Creates a directory symbolic link. By default, this command creates a file symbolic link.
+/h	Creates a hard link instead of a symbolic link.
+/j	Creates a Directory Junction.
+<link>	Specifies the name of the symbolic link being created.
+<target>	Specifies the path (relative or absolute) that the new symbolic link refers to.
+/?	Displays help at the command prompt.
+
+mklink "c:\demo suites\CreateAdContent\stuff1.ps1" "C:\Demo Suites\CreateAdContent\Invoke-ADContentGenerator.ps1"
+
+
+
+PART 2: Setup a desktop shortcut --
+
+commandline: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -nologo -noprofile -Command "& {Start-Process powershell.exe -Verb RunAs -ArgumentList ('-noprofile -nologo -noexit -ExecutionPolicy Bypass -file ""c:\demo suites\CreateAdContent\stuff1.ps1""')}"
+
+
+start in: "c:\Demo Suites\CreateAdContent"
+
+I named my shortcut "PoSh shortcut to run changes"
